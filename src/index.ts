@@ -118,7 +118,7 @@ type StrictTableIndexValueArg<
       >
     : never;
 
-export type DbCtx<DataModel extends GenericDataModel> = {
+type DbCtx<DataModel extends GenericDataModel> = {
   db: GenericDatabaseReader<DataModel>;
 };
 
@@ -1112,8 +1112,9 @@ function createViaNamespace<
 }
 
 export function createQueryFacade<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: GenericDatabaseReader<DataModel>,
 ): QueryFacade<DataModel> {
+  const ctx = { db };
   return new Proxy(
     {},
     {
@@ -1128,10 +1129,10 @@ export function createQueryFacade<DataModel extends GenericDataModel>(
 }
 
 export function compute<DataModel extends GenericDataModel, Output = unknown>(
-  ctx: DbCtx<DataModel>,
-  load: (ctx: DbCtx<DataModel>) => Promise<Output> | Output,
+  db: GenericDatabaseReader<DataModel>,
+  load: (db: GenericDatabaseReader<DataModel>) => Promise<Output> | Output,
 ): QueryNode<Output> {
-  return createQueryNode(async () => await load(ctx));
+  return createQueryNode(async () => await load(db));
 }
 
 async function queryUniqueByIndex<DataModel extends GenericDataModel>(

@@ -16,12 +16,12 @@ import type { DataModel } from './convex/_generated/dataModel';
 
 type AppQueryFacade = QueryFacade<DataModel>;
 
-export const q = createQueryFacade<DataModel>({ db });
+export const q = createQueryFacade<DataModel>(db);
 
 const enriched = await q.users.byClerkId('clerk-id').with((user) => ({
   tags: q.tags.byOwnerId(user._id).many(),
-  score: compute({ db }, async (ctx) => {
-    const taps = await createQueryFacade<DataModel>(ctx).taps.byUserId(user._id).many();
+  score: compute(db, async (db) => {
+    const taps = await createQueryFacade<DataModel>(db).taps.byUserId(user._id).many();
     return taps.length;
   }),
 })).unique();
