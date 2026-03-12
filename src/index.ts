@@ -118,9 +118,7 @@ type StrictTableIndexValueArg<
       >
     : never;
 
-type DbCtx<DataModel extends GenericDataModel> = {
-  db: GenericDatabaseReader<DataModel>;
-};
+type DbReader<DataModel extends GenericDataModel> = GenericDatabaseReader<DataModel>;
 
 type IdTargetTable<DataModel extends GenericDataModel, Value> =
   Value extends GenericId<infer Table extends AppTable<DataModel>> ? Table : never;
@@ -516,12 +514,12 @@ function inferFieldNameFromIndex(index: string) {
 }
 
 function createIndexedQuery<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   table: AppTable<DataModel>,
   index?: string,
   selector?: unknown,
 ) {
-  const baseQuery = ctx.db.query(table);
+  const baseQuery = db.query(table);
   if (index === undefined) {
     return baseQuery;
   }
@@ -540,12 +538,12 @@ function createIndexedQuery<DataModel extends GenericDataModel>(
 }
 
 function createViaQuery<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   joinTable: AppTable<DataModel>,
   index: string,
   selector?: unknown,
 ) {
-  const baseQuery = ctx.db.query(joinTable);
+  const baseQuery = db.query(joinTable);
   if (selector === undefined) {
     return baseQuery.withIndex(index as any);
   }
@@ -562,14 +560,14 @@ async function collectViaPairs<
   TargetTable extends AppTable<DataModel>,
   JoinTable extends AppTable<DataModel>,
 >(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   targetField: string,
   links: AppDoc<DataModel, JoinTable>[],
 ): Promise<ViaPair<DataModel, TargetTable, JoinTable>[]> {
   const pairs = await Promise.all(
     links.map(async (link) => {
       const id = link[targetField] as GenericId<TargetTable> | null | undefined;
-      const doc = id ? await ctx.db.get(id) : null;
+      const doc = id ? await db.get(id) : null;
       return doc ? { doc, link } : null;
     }),
   );
@@ -586,7 +584,7 @@ async function collectViaPairsUntil<
   TargetTable extends AppTable<DataModel>,
   JoinTable extends AppTable<DataModel>,
 >(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   targetField: string,
   query: AsyncIterable<AppDoc<DataModel, JoinTable>>,
   count: number,
@@ -597,7 +595,7 @@ async function collectViaPairsUntil<
     const id = link[targetField] as GenericId<TargetTable> | null | undefined;
     if (!id) continue;
 
-    const doc = await ctx.db.get(id);
+    const doc = await db.get(id);
     if (!doc) continue;
 
     pairs.push({ doc, link });
@@ -626,7 +624,7 @@ function normalizeViaUniqueError(
 }
 
 function createPlanRuntime<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   plan: QueryPlan,
 ): PlanRuntime<any, any> {
   const source = plan.source;
@@ -634,7 +632,7 @@ function createPlanRuntime<DataModel extends GenericDataModel>(
   switch (source.kind) {
     case 'id':
       return {
-        findOrNull: async () => await ctx.db.get(source.id),
+        findOrNull: async () => await db.get(source.id),
         mapOne: async (rawItem) => rawItem,
         mapMany: async (rawItems) => rawItems,
         missingMessages: {
@@ -648,7 +646,7 @@ function createPlanRuntime<DataModel extends GenericDataModel>(
             await Promise.all(
               source.values.map(
                 async (value: unknown) =>
-                  await queryUniqueByIndex(ctx, source.table, source.index, value),
+                  await queryUniqueByIndex(db, source.table, source.index, value),
               ),
             )
           ).filter(
@@ -663,7 +661,7 @@ function createPlanRuntime<DataModel extends GenericDataModel>(
     case 'query': {
       const runQuery = () =>
         buildQuery(
-          () => createIndexedQuery(ctx, source.table, source.index, source.selector),
+          () => createIndexedQuery(db, source.table, source.index, source.selector),
           plan.modifiers,
         );
 
@@ -686,14 +684,14 @@ function createPlanRuntime<DataModel extends GenericDataModel>(
     case 'via': {
       const runQuery = () =>
         buildQuery(
-          () => createViaQuery(ctx, source.joinTable, source.index, source.selector),
+          () => createViaQuery(db, source.joinTable, source.index, source.selector),
           plan.modifiers,
         );
 
       return {
         unique: async () => {
           const pairs = await collectViaPairsUntil(
-            ctx,
+            db,
             source.targetField,
             runQuery(),
             2,
@@ -705,7 +703,7 @@ function createPlanRuntime<DataModel extends GenericDataModel>(
         },
         first: async () => {
           const pairs = await collectViaPairsUntil(
-            ctx,
+            db,
             source.targetField,
             runQuery(),
             1,
@@ -713,13 +711,13 @@ function createPlanRuntime<DataModel extends GenericDataModel>(
           return pairs[0] ?? null;
         },
         many: async () =>
-          await collectViaPairs(ctx, source.targetField, await runQuery().collect()),
+          await collectViaPairs(db, source.targetField, await runQuery().collect()),
         take: async (count) =>
-          await collectViaPairs(ctx, source.targetField, await runQuery().take(count)),
+          await collectViaPairs(db, source.targetField, await runQuery().take(count)),
         paginate: async (opts) => {
           const result = await runQuery().paginate(opts);
           return {
-            page: await collectViaPairs(ctx, source.targetField, result.page),
+            page: await collectViaPairs(db, source.targetField, result.page),
             isDone: result.isDone,
             continueCursor: result.continueCursor,
           };
@@ -768,10 +766,10 @@ async function decorateItems(plan: QueryPlan, rawItems: any[], items: any[]) {
 }
 
 async function executeFind<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   plan: QueryPlan,
 ) {
-  const runtime = createPlanRuntime(ctx, plan);
+  const runtime = createPlanRuntime(db, plan);
   const rawItem = await runtime.findOrNull?.();
   if (rawItem == null) {
     throw new Error(runtime.missingMessages.find);
@@ -780,10 +778,10 @@ async function executeFind<DataModel extends GenericDataModel>(
 }
 
 async function executeFindOrNull<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   plan: QueryPlan,
 ) {
-  const runtime = createPlanRuntime(ctx, plan);
+  const runtime = createPlanRuntime(db, plan);
   const rawItem = await runtime.findOrNull?.();
   if (rawItem == null) {
     return null;
@@ -792,10 +790,10 @@ async function executeFindOrNull<DataModel extends GenericDataModel>(
 }
 
 async function executeUnique<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   plan: QueryPlan,
 ) {
-  const runtime = createPlanRuntime(ctx, plan);
+  const runtime = createPlanRuntime(db, plan);
   let rawItem: any;
   try {
     rawItem = await runtime.unique?.();
@@ -809,10 +807,10 @@ async function executeUnique<DataModel extends GenericDataModel>(
 }
 
 async function executeUniqueOrNull<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   plan: QueryPlan,
 ) {
-  const runtime = createPlanRuntime(ctx, plan);
+  const runtime = createPlanRuntime(db, plan);
   let rawItem: any;
   try {
     rawItem = await runtime.unique?.();
@@ -826,10 +824,10 @@ async function executeUniqueOrNull<DataModel extends GenericDataModel>(
 }
 
 async function executeFirst<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   plan: QueryPlan,
 ) {
-  const runtime = createPlanRuntime(ctx, plan);
+  const runtime = createPlanRuntime(db, plan);
   const rawItem = await runtime.first?.();
   if (rawItem == null) {
     throw new Error(runtime.missingMessages.first);
@@ -838,10 +836,10 @@ async function executeFirst<DataModel extends GenericDataModel>(
 }
 
 async function executeFirstOrNull<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   plan: QueryPlan,
 ) {
-  const runtime = createPlanRuntime(ctx, plan);
+  const runtime = createPlanRuntime(db, plan);
   const rawItem = await runtime.first?.();
   if (rawItem == null) {
     return null;
@@ -850,30 +848,30 @@ async function executeFirstOrNull<DataModel extends GenericDataModel>(
 }
 
 async function executeMany<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   plan: QueryPlan,
 ) {
-  const runtime = createPlanRuntime(ctx, plan);
+  const runtime = createPlanRuntime(db, plan);
   const rawItems = await runtime.many?.();
   return await decorateItems(plan, rawItems ?? [], await runtime.mapMany(rawItems ?? []));
 }
 
 async function executeTake<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   plan: QueryPlan,
   count: number,
 ) {
-  const runtime = createPlanRuntime(ctx, plan);
+  const runtime = createPlanRuntime(db, plan);
   const rawItems = await runtime.take?.(count);
   return await decorateItems(plan, rawItems ?? [], await runtime.mapMany(rawItems ?? []));
 }
 
 async function executePaginate<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   plan: QueryPlan,
   opts: PaginationOptions,
 ) {
-  const runtime = createPlanRuntime(ctx, plan);
+  const runtime = createPlanRuntime(db, plan);
   const result = await runtime.paginate?.(opts);
   const rawItems = result?.page ?? [];
 
@@ -885,22 +883,22 @@ async function executePaginate<DataModel extends GenericDataModel>(
 }
 
 function createExpandableSingleFromPlan<Item, Nullable extends boolean>(
-  ctx: DbCtx<any>,
+  db: DbReader<any>,
   plan: QueryPlan,
   nullable: Nullable,
 ): ExpandableSingleQueryBuilder<Item, Nullable> {
   const execute = async () =>
     nullable
-      ? ((await executeFindOrNull(ctx, plan)) as Nullable extends true
+      ? ((await executeFindOrNull(db, plan)) as Nullable extends true
           ? Item | null
           : Item)
-      : ((await executeFind(ctx, plan)) as Nullable extends true ? Item | null : Item);
+      : ((await executeFind(db, plan)) as Nullable extends true ? Item | null : Item);
 
   return {
     ...createQueryNode(execute),
     with<Builder extends AnyWithBuilder<Item>>(withBuilder: Builder) {
       return createExpandableSingleFromPlan<ExpandWith<Item, Builder>, Nullable>(
-        ctx,
+        db,
         withExpander(plan, withBuilder),
         nullable,
       );
@@ -909,24 +907,24 @@ function createExpandableSingleFromPlan<Item, Nullable extends boolean>(
 }
 
 function createBatchFacade<Item>(
-  ctx: DbCtx<any>,
+  db: DbReader<any>,
   plan: QueryPlan,
 ): BatchQueryFacade<Item> {
   return {
     with<Builder extends AnyWithBuilder<Item>>(withBuilder: Builder) {
       return createBatchFacade<ExpandWith<Item, Builder>>(
-        ctx,
+        db,
         withExpander(plan, withBuilder),
       );
     },
     many() {
-      return createQueryNode(async () => await executeMany(ctx, plan));
+      return createQueryNode(async () => await executeMany(db, plan));
     },
   };
 }
 
 function createCollectionFacade<Item>(
-  ctx: DbCtx<any>,
+  db: DbReader<any>,
   plan: QueryPlan,
 ):
   | TableRangeQueryFacade<any, any, Item>
@@ -935,48 +933,48 @@ function createCollectionFacade<Item>(
   const facade: any = {
     with<Builder extends AnyWithBuilder<Item>>(withBuilder: Builder) {
       return createCollectionFacade<ExpandWith<Item, Builder>>(
-        ctx,
+        db,
         withExpander(plan, withBuilder),
       );
     },
     order(direction: 'asc' | 'desc') {
       return createCollectionFacade<Item>(
-        ctx,
+        db,
         withModifier(plan, (query) => query.order(direction)),
       );
     },
     filter(filterer: QueryFilter) {
       return createCollectionFacade<Item>(
-        ctx,
+        db,
         withModifier(plan, (query) => query.filter(filterer)),
       );
     },
     unique() {
-      return createQueryNode(async () => await executeUnique(ctx, plan));
+      return createQueryNode(async () => await executeUnique(db, plan));
     },
     uniqueOrNull() {
-      return createQueryNode(async () => await executeUniqueOrNull(ctx, plan));
+      return createQueryNode(async () => await executeUniqueOrNull(db, plan));
     },
     first() {
-      return createQueryNode(async () => await executeFirst(ctx, plan));
+      return createQueryNode(async () => await executeFirst(db, plan));
     },
     firstOrNull() {
-      return createQueryNode(async () => await executeFirstOrNull(ctx, plan));
+      return createQueryNode(async () => await executeFirstOrNull(db, plan));
     },
     take(count: number) {
-      return executeTake(ctx, plan, count);
+      return executeTake(db, plan, count);
     },
     paginate(opts: PaginationOptions) {
-      return executePaginate(ctx, plan, opts);
+      return executePaginate(db, plan, opts);
     },
     many() {
-      return createQueryNode(async () => await executeMany(ctx, plan));
+      return createQueryNode(async () => await executeMany(db, plan));
     },
   };
 
   if (plan.source.kind === 'via') {
     facade.withSource = (key: string) =>
-      createCollectionFacade(ctx, withSourceKey(plan, key));
+      createCollectionFacade(db, withSourceKey(plan, key));
   }
 
   return facade;
@@ -1029,23 +1027,23 @@ function createTableNamespace<
   DataModel extends GenericDataModel,
   const Table extends AppTable<DataModel>,
 >(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   table: Table,
 ): TableNamespace<DataModel, Table> {
-  const rootFacade = createCollectionFacade(ctx, createQueryPlan(table));
+  const rootFacade = createCollectionFacade(db, createQueryPlan(table));
   const target = {
     ...rootFacade,
     find(id: GenericId<Table>) {
-      return createExpandableSingleFromPlan(ctx, createIdPlan(table, id), false);
+      return createExpandableSingleFromPlan(db, createIdPlan(table, id), false);
     },
     findOrNull(id: GenericId<Table>) {
-      return createExpandableSingleFromPlan(ctx, createIdPlan(table, id), true);
+      return createExpandableSingleFromPlan(db, createIdPlan(table, id), true);
     },
     in(ids: GenericId<Table>[]) {
-      return createBatchFacade(ctx, createBatchPlan(table, 'by_id', ids as never[]));
+      return createBatchFacade(db, createBatchPlan(table, 'by_id', ids as never[]));
     },
     via(joinTable: AppTable<DataModel>, targetField: string) {
-      return createViaNamespace(ctx, table, joinTable, targetField);
+      return createViaNamespace(db, table, joinTable, targetField);
     },
   } as any;
 
@@ -1060,7 +1058,7 @@ function createTableNamespace<
 
       const indexMethod = ((value?: unknown) =>
         createCollectionFacade(
-          ctx,
+          db,
           createQueryPlan(table, prop as TableIndexName<DataModel, Table>, value),
         )) as ((value?: unknown) => unknown) & {
         in: (values: unknown[]) => unknown;
@@ -1068,7 +1066,7 @@ function createTableNamespace<
 
       indexMethod.in = (values: unknown[]) =>
         createBatchFacade(
-          ctx,
+          db,
           createBatchPlan(table, prop as TableIndexName<DataModel, Table>, values),
         );
 
@@ -1082,7 +1080,7 @@ function createViaNamespace<
   const TargetTable extends AppTable<DataModel>,
   const JoinTable extends AppTable<DataModel>,
 >(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   targetTable: TargetTable,
   joinTable: JoinTable,
   targetField: string,
@@ -1097,7 +1095,7 @@ function createViaNamespace<
 
         return (value?: unknown) =>
           createCollectionFacade(
-            ctx,
+            db,
             createViaPlan(
               targetTable,
               joinTable,
@@ -1114,7 +1112,6 @@ function createViaNamespace<
 export function createQueryFacade<DataModel extends GenericDataModel>(
   db: GenericDatabaseReader<DataModel>,
 ): QueryFacade<DataModel> {
-  const ctx = { db };
   return new Proxy(
     {},
     {
@@ -1122,7 +1119,7 @@ export function createQueryFacade<DataModel extends GenericDataModel>(
         if (typeof prop !== 'string' || RESERVED_PROMISE_KEYS.has(prop)) {
           return undefined;
         }
-        return createTableNamespace(ctx, prop as AppTable<DataModel>);
+        return createTableNamespace(db, prop as AppTable<DataModel>);
       },
     },
   ) as QueryFacade<DataModel>;
@@ -1136,18 +1133,18 @@ export function compute<DataModel extends GenericDataModel, Output = unknown>(
 }
 
 async function queryUniqueByIndex<DataModel extends GenericDataModel>(
-  ctx: DbCtx<DataModel>,
+  db: DbReader<DataModel>,
   table: AppTable<DataModel>,
   index: string,
   value: unknown,
 ) {
   if (index === 'by_id') {
-    return await (ctx.db.query(table) as any)
+    return await (db.query(table) as any)
       .withIndex('by_id', (q: any) => q.eq('_id', value))
       .unique();
   }
 
-  return await ctx.db
+  return await db
     .query(table)
     .withIndex(index as any, (q: any) =>
       applyIndexValues(q, normalizeIndexValues(index, value)),
