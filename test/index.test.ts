@@ -107,7 +107,7 @@ class FakeDb {
   }
 }
 
-describe('convex-query type surface', () => {
+describe('convex-relations type surface', () => {
   test('infers indexed and expanded queries', () => {
     const qDb = null as never as GenericDatabaseReader<DataModel>;
     const q = createQueryFacade<DataModel>(qDb);
@@ -145,7 +145,7 @@ describe('convex-query type surface', () => {
   });
 });
 
-describe('convex-query runtime behavior', () => {
+describe('convex-relations runtime behavior', () => {
   test('supports indexed, expanded, and computed queries', async () => {
     const userId = 'user_1';
     const tagId = 'tag_1';

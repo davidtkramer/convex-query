@@ -1,17 +1,17 @@
-# `@davidtkramer/convex-query`
+# `@davidtkramer/convex-relations`
 
 Typed query facade helpers for Convex backends.
 
 ## Install
 
 ```bash
-pnpm add @davidtkramer/convex-query convex
+pnpm add @davidtkramer/convex-relations convex
 ```
 
 ## Usage
 
 ```ts
-import { createQueryFacade, compute, type QueryFacade } from '@davidtkramer/convex-query';
+import { createQueryFacade, compute, type QueryFacade } from '@davidtkramer/convex-relations';
 import type { DataModel } from './convex/_generated/dataModel';
 
 type AppQueryFacade = QueryFacade<DataModel>;

@@ -1,16 +1,16 @@
 {
-  "name": "@davidtkramer/convex-query",
+  "name": "@davidtkramer/convex-relations",
   "version": "0.0.0-local",
   "description": "Typed query facade helpers for Convex backends",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/davidtkramer/convex-query.git"
+    "url": "git+https://github.com/davidtkramer/convex-relations.git"
   },
-  "homepage": "https://github.com/davidtkramer/convex-query",
+  "homepage": "https://github.com/davidtkramer/convex-relations",
   "bugs": {
-    "url": "https://github.com/davidtkramer/convex-query/issues"
+    "url": "https://github.com/davidtkramer/convex-relations/issues"
   },
   "files": [
     "dist",
