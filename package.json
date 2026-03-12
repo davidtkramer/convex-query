@@ -1,0 +1,45 @@
+{
+  "name": "@davidtkramer/convex-query",
+  "version": "0.0.0-local",
+  "description": "Typed query facade helpers for Convex backends",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/davidtkramer/convex-query.git"
+  },
+  "homepage": "https://github.com/davidtkramer/convex-query",
+  "bugs": {
+    "url": "https://github.com/davidtkramer/convex-query/issues"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "check-types": "tsc --noEmit",
+    "test": "vitest run --typecheck"
+  },
+  "peerDependencies": {
+    "convex": "^1.25.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "convex": "1.25.4",
+    "convex-test": "^0.0.41",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.15"
+  },
+  "packageManager": "pnpm@9.15.9"
+}
