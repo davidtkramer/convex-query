@@ -2,36 +2,9 @@
 
 Typed relations and query composition for Convex backends.
 
-`convex-relations` is a server-side query facade for Convex. It gives you:
-
-- typed table namespaces from your generated `DataModel`
-  ```ts
-  ctx.q.posts.many();
-  ```
-- indexes as first-class query methods
-  ```ts
-  ctx.q.posts.bySlug("hello-world").unique();
-  ```
-- relation expansion with `with(...)`
-  ```ts
-  ctx.q.posts
-    .find(postId)
-    .with((post) => ({ author: ctx.q.authors.find(post.authorId) }));
-  ```
-- join-table traversal with `via(...)`
-  ```ts
-  ctx.q.categories.via("postCategories", "categoryId").byPostId(postId).many();
-  ```
-- batch loading with `.in(...)`
-  ```ts
-  ctx.q.posts.find.in(postIds);
-  ```
-- arbitrary computed fields with `compute(...)`
-  ```ts
-  ctx.q.posts
-    .find(postId)
-    .with((post) => ({ summary: compute(() => summarize(post.body)) }));
-  ```
+`convex-relations` is a server-side query facade for Convex. It lets you write
+data loading code as a typed result tree instead of manually coordinating
+lookups, parallelization, and response shaping by hand.
 
 ## Example
 
@@ -75,14 +48,14 @@ export const getPost = query({
 });
 ```
 
-This example shows most of the value proposition in one place:
+This example shows the core model:
 
-- table-scoped access through `q.posts`, `q.comments`, `q.categories`
-- typed index lookup with `.bySlug(...)` and `.byPostId(...)`
+- table-scoped access through `q.posts`, `q.comments`, and `q.categories`
+- indexes as first-class query methods like `.bySlug(...)` and `.byPostId(...)`
 - nested relation expansion with `.with(...)` inside `.with(...)`
-- typed join traversal with `.via(...)`
-- parallel nested loading inside one `with(...)`
-- a final strongly typed result from one expression
+- join-table traversal with `.via(...)`
+- parallel nested loading within each `with(...)`
+- a final strongly typed, API-ready result from one expression
 
 ## Equivalent Convex Code
 
