@@ -11,8 +11,8 @@ It is designed for Convex query and mutation code, not frontend query clients.
 
 ## Table of Contents
 
-- [The Problem](#the-problem)
-- [The Solution](#the-solution)
+- [Example](#example)
+- [Equivalent Convex Code](#equivalent-convex-code)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Core Concepts](#core-concepts)
@@ -27,15 +27,60 @@ It is designed for Convex query and mutation code, not frontend query clients.
 - [Type Notes](#type-notes)
 - [License](#license)
 
-## The Problem
+## Example
 
-Convex gives you excellent low-level primitives, and `convex-helpers` includes
-relationship utilities like `getOneFrom`, `getManyFrom`, and `getManyVia`.
-But once you want nested loading, computed fields, reusable expansions, and
-end-to-end type inference over your actual indexes and ids, the DX gets
-verbose quickly.
+With `convex-relations`, a nested API-ready query can look like this:
 
-You end up writing code like:
+```ts
+import { query } from "./_generated/server";
+
+export const getPost = query({
+  args: {},
+  handler: async (ctx) => {
+    const post = await ctx.q.posts
+      .bySlug("hello-world")
+      .with((post) => ({
+        author: ctx.q.authors.find(post.authorId),
+        recentComments: ctx.q.comments
+          .byPostId(post._id)
+          .order("desc")
+          .with((comment) => ({
+            author: ctx.q.authors.find(comment.authorId),
+          }))
+          .take(10),
+        categories: ctx.q.categories
+          .via("postCategories", "categoryId")
+          .byPostId(post._id)
+          .many(),
+      }))
+      .unique();
+
+    // post.author is an author document
+    console.log(post.author.name);
+
+    // post.recentComments is a list of comments with nested authors
+    console.log(post.recentComments[0]?.author.name);
+
+    // post.categories is already shaped as related category documents
+    console.log(post.categories.map((category) => category.slug));
+
+    return post;
+  },
+});
+```
+
+This example shows most of the value proposition in one place:
+
+- table-scoped access through `q.posts`, `q.comments`, `q.categories`
+- typed index lookup with `.bySlug(...)` and `.byPostId(...)`
+- nested relation expansion with `.with(...)` inside `.with(...)`
+- typed join traversal with `.via(...)`
+- parallel nested loading inside one `with(...)`
+- a final strongly typed result from one expression
+
+## Equivalent Convex Code
+
+Without `convex-relations`, you end up assembling the same result shape by hand:
 
 ```ts
 const post = await ctx.db
@@ -88,60 +133,6 @@ That works, but you are responsible for:
 - traversing join tables by hand
 - assembling the final tree shape yourself for API responses
 - keeping the whole thing type-safe as it grows
-
-The result is correct, but the relationship intent gets split across several
-different APIs and the response-shaping logic becomes repetitive.
-
-## The Solution
-
-`convex-relations` gives you a single typed interface over your Convex data model:
-
-```ts
-import { query } from "./_generated/server";
-
-export const getPost = query({
-  args: {},
-  handler: async (ctx) => {
-    const post = await ctx.q.posts
-      .bySlug("hello-world")
-      .with((post) => ({
-        author: ctx.q.authors.find(post.authorId),
-        recentComments: ctx.q.comments
-          .byPostId(post._id)
-          .order("desc")
-          .with((comment) => ({
-            author: ctx.q.authors.find(comment.authorId),
-          }))
-          .take(10),
-        categories: ctx.q.categories
-          .via("postCategories", "categoryId")
-          .byPostId(post._id)
-          .many(),
-      }))
-      .unique();
-
-    // post.author is an author document
-    console.log(post.author.name);
-
-    // post.recentComments is a list of comments with nested authors
-    console.log(post.recentComments[0]?.author.name);
-
-    // post.categories is already shaped as related category documents
-    console.log(post.categories.map((category) => category.slug));
-
-    return post;
-  },
-});
-```
-
-That example shows most of the value proposition in one place:
-
-- table-scoped access through `q.posts`, `q.comments`, `q.categories`
-- typed index lookup with `.bySlug(...)` and `.byPostId(...)`
-- nested relation expansion with `.with(...)` inside `.with(...)`
-- typed join traversal with `.via(...)`
-- parallel nested loading inside one `with(...)`
-- a final strongly typed result from one expression
 
 ## Installation
 
