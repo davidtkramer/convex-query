@@ -11,9 +11,9 @@ It is designed for Convex query and mutation code, not frontend query clients.
 
 ## Table of Contents
 
+- [Installation](#installation)
 - [Example](#example)
 - [Equivalent Convex Code](#equivalent-convex-code)
-- [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Core Concepts](#core-concepts)
 - [API](#api)
@@ -26,6 +26,24 @@ It is designed for Convex query and mutation code, not frontend query clients.
 - [Comparison to `convex-helpers/server/relationships`](#comparison-to-convex-helpersserverrelationships)
 - [Type Notes](#type-notes)
 - [License](#license)
+
+## Installation
+
+```bash
+npm install @davidtkramer/convex-relations
+```
+
+```bash
+pnpm add @davidtkramer/convex-relations
+```
+
+```bash
+bun add @davidtkramer/convex-relations
+```
+
+```bash
+yarn add @davidtkramer/convex-relations
+```
 
 ## Example
 
@@ -84,24 +102,24 @@ Without `convex-relations`, you end up assembling the same result shape by hand:
 
 ```ts
 const post = await ctx.db
-  .query('posts')
-  .withIndex('bySlug', (q) => q.eq('slug', args.slug))
+  .query("posts")
+  .withIndex("bySlug", (q) => q.eq("slug", args.slug))
   .unique();
 
 if (!post) {
-  throw new Error('Post not found');
+  throw new Error("Post not found");
 }
 
 const [author, recentComments, postCategoryLinks] = await Promise.all([
   ctx.db.get(post.authorId),
   ctx.db
-    .query('comments')
-    .withIndex('byPostId', (q) => q.eq('postId', post._id))
-    .order('desc')
+    .query("comments")
+    .withIndex("byPostId", (q) => q.eq("postId", post._id))
+    .order("desc")
     .take(10),
   ctx.db
-    .query('postCategories')
-    .withIndex('byPostId', (q) => q.eq('postId', post._id))
+    .query("postCategories")
+    .withIndex("byPostId", (q) => q.eq("postId", post._id))
     .collect(),
 ]);
 
@@ -134,12 +152,6 @@ That works, but you are responsible for:
 - assembling the final tree shape yourself for API responses
 - keeping the whole thing type-safe as it grows
 
-## Installation
-
-```bash
-pnpm add @davidtkramer/convex-relations convex
-```
-
 ## Quick Start
 
 Most apps expose the facade on `ctx.q` through `convex-helpers` custom function
@@ -147,10 +159,7 @@ wrappers. A minimal setup looks like this:
 
 ```ts
 // convex/lib/functions.ts
-import {
-  customCtx,
-  customQuery,
-} from "convex-helpers/server/customFunctions";
+import { customCtx, customQuery } from "convex-helpers/server/customFunctions";
 import { query as baseQuery } from "./_generated/server";
 import type { DataModel } from "./_generated/dataModel";
 import { createQueryFacade } from "@davidtkramer/convex-relations";
