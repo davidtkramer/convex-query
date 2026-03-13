@@ -373,7 +373,7 @@ describe("convex-relations via builders", () => {
         .first();
       const expandedViaUniqueOrNull = await q.tags
         .via("postsTags", "tagId")
-        .byPostIdAndTagId({ postId, tagId })
+        .byPostIdAndTagId(postId, tagId)
         .withSource("link")
         .uniqueOrNull();
       const viaZeroArg = await q.tags

@@ -40,43 +40,57 @@ type IndexFields<
   RawIndexFields<DataModel, Table, IndexName>[number],
   '_creationTime'
 >;
+type StripCreationTime<Fields extends readonly string[]> = Fields extends readonly [
+  ...infer Rest extends readonly string[],
+  '_creationTime',
+]
+  ? Rest
+  : Fields;
+type UserIndexFields<
+  DataModel extends GenericDataModel,
+  Table extends AppTable<DataModel>,
+  IndexName extends UserIndex<DataModel, Table>,
+> = StripCreationTime<RawIndexFields<DataModel, Table, IndexName>>;
 type SingleIndexField<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
   IndexName extends UserIndex<DataModel, Table>,
-> =
-  RawIndexFields<DataModel, Table, IndexName> extends [
-    infer Field extends string,
-    '_creationTime',
-  ]
+> = UserIndexFields<DataModel, Table, IndexName> extends readonly [
+  infer Field extends string,
+]
     ? Field
     : never;
-type TuplePrefixValues<
+type TuplePrefixArgs<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
   Fields extends readonly string[],
   Seen extends readonly string[] = [],
+  SeenValues extends readonly unknown[] = [],
 > = Fields extends readonly [
   infer Head extends string,
   ...infer Tail extends readonly string[],
 ]
   ?
-      | Simplify<{
-          [FieldName in [...Seen, Head][number]]: AppDoc<DataModel, Table>[FieldName];
-        }>
-      | TuplePrefixValues<DataModel, Table, Tail, [...Seen, Head]>
+      | [...SeenValues, AppDoc<DataModel, Table>[Head]]
+      | TuplePrefixArgs<
+          DataModel,
+          Table,
+          Tail,
+          [...Seen, Head],
+          [...SeenValues, AppDoc<DataModel, Table>[Head]]
+        >
   : never;
-type PrefixIndexValues<
+type PositionalIndexArgs<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
   IndexName extends UserIndex<DataModel, Table>,
-> = TuplePrefixValues<DataModel, Table, RawIndexFields<DataModel, Table, IndexName>>;
+> = TuplePrefixArgs<DataModel, Table, UserIndexFields<DataModel, Table, IndexName>>;
 export type RootIndexValueArg<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
   IndexName extends UserIndex<DataModel, Table>,
 > =
-  | PrefixIndexValues<DataModel, Table, IndexName>
+  | PositionalIndexArgs<DataModel, Table, IndexName>
   | (SingleIndexField<DataModel, Table, IndexName> extends never
       ? never
       : AppDoc<DataModel, Table>[SingleIndexField<DataModel, Table, IndexName>]);
@@ -86,13 +100,17 @@ export type StrictRootIndexValueArg<
   IndexName extends UserIndex<DataModel, Table>,
   Value extends RootIndexValueArg<DataModel, Table, IndexName>,
 > =
-  Value extends PrefixIndexValues<DataModel, Table, IndexName>
-    ? Value &
-        Record<Exclude<keyof Value, IndexFields<DataModel, Table, IndexName>>, never>
-    : Value;
+  Value;
 type TableIndexName<DataModel extends GenericDataModel, Table extends AppTable<DataModel>> =
   | UserIndex<DataModel, Table>
   | 'by_id';
+type UserIndexArg<
+  DataModel extends GenericDataModel,
+  Table extends AppTable<DataModel>,
+  IndexName extends UserIndex<DataModel, Table>,
+> = SingleIndexField<DataModel, Table, IndexName> extends never
+  ? PositionalIndexArgs<DataModel, Table, IndexName>
+  : AppDoc<DataModel, Table>[SingleIndexField<DataModel, Table, IndexName>];
 type TableIndexValueArg<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
@@ -100,22 +118,22 @@ type TableIndexValueArg<
 > = IndexName extends 'by_id'
   ? GenericId<Table>
   : IndexName extends UserIndex<DataModel, Table>
-    ? RootIndexValueArg<DataModel, Table, IndexName>
+    ? UserIndexArg<DataModel, Table, IndexName>
     : never;
 type StrictTableIndexValueArg<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
   IndexName extends TableIndexName<DataModel, Table>,
   Value extends TableIndexValueArg<DataModel, Table, IndexName>,
+> = Value;
+type TableIndexInvocationArgs<
+  DataModel extends GenericDataModel,
+  Table extends AppTable<DataModel>,
+  IndexName extends TableIndexName<DataModel, Table>,
 > = IndexName extends 'by_id'
-  ? Value
+  ? [GenericId<Table>]
   : IndexName extends UserIndex<DataModel, Table>
-    ? StrictRootIndexValueArg<
-        DataModel,
-        Table,
-        IndexName,
-        Extract<Value, RootIndexValueArg<DataModel, Table, IndexName>>
-      >
+    ? PositionalIndexArgs<DataModel, Table, IndexName>
     : never;
 
 type DbReader<DataModel extends GenericDataModel> = GenericDatabaseReader<DataModel>;
@@ -309,8 +327,8 @@ type ViaIndexNamespace<
 > = {
   [IndexName in UserIndex<DataModel, JoinTable>]: {
     (): ViaQueryFacade<DataModel, TargetTable, JoinTable>;
-    <const Value extends RootIndexValueArg<DataModel, JoinTable, IndexName>>(
-      value: StrictRootIndexValueArg<DataModel, JoinTable, IndexName, Value>,
+    <const Args extends PositionalIndexArgs<DataModel, JoinTable, IndexName>>(
+      ...args: Args
     ): ViaQueryFacade<DataModel, TargetTable, JoinTable>;
     (selector: IndexSelector): ViaQueryFacade<DataModel, TargetTable, JoinTable>;
   };
@@ -339,8 +357,8 @@ type TableNamespace<
 } & TableRangeQueryFacade<DataModel, Table> & {
     [IndexName in TableIndexName<DataModel, Table>]: {
       (selector: IndexSelector): TableQueryFacade<DataModel, Table>;
-      <const Value extends TableIndexValueArg<DataModel, Table, IndexName>>(
-        value: StrictTableIndexValueArg<DataModel, Table, IndexName, Value>,
+      <const Args extends TableIndexInvocationArgs<DataModel, Table, IndexName>>(
+        ...args: Args
       ): TableQueryFacade<DataModel, Table>;
       (): TableRangeQueryFacade<DataModel, Table>;
       in<const Value extends TableIndexValueArg<DataModel, Table, IndexName>>(
@@ -485,6 +503,11 @@ function withSourceKey(plan: QueryPlan, sourceKey: string): QueryPlan {
 }
 
 function normalizeIndexValues(index: string, value: unknown) {
+  if (Array.isArray(value)) {
+    const fieldNames = inferFieldNamesFromIndex(index);
+    return Object.fromEntries(fieldNames.map((field, index) => [field, value[index]]));
+  }
+
   if (isPlainObject(value)) {
     return value as Record<string, unknown>;
   }
@@ -507,8 +530,18 @@ function applyIndexValues(query: any, values: Record<string, unknown>) {
 }
 
 function inferFieldNameFromIndex(index: string) {
+  return inferFieldNamesFromIndex(index)[0]!;
+}
+
+function inferFieldNamesFromIndex(index: string) {
+  if (index === 'by_id') {
+    return ['_id'];
+  }
   if (index.startsWith('by') && index.length > 2) {
-    return `${index[2]!.toLowerCase()}${index.slice(3)}`;
+    return index
+      .slice(2)
+      .split('And')
+      .map((part) => `${part[0]!.toLowerCase()}${part.slice(1)}`);
   }
   throw new Error(`Cannot infer field name from index ${index}`);
 }
@@ -1023,6 +1056,16 @@ function createViaPlan(
   });
 }
 
+function normalizeIndexSelectorArgs(args: unknown[]) {
+  if (args.length === 0) {
+    return undefined;
+  }
+  if (args.length === 1) {
+    return args[0];
+  }
+  return args;
+}
+
 function createTableNamespace<
   DataModel extends GenericDataModel,
   const Table extends AppTable<DataModel>,
@@ -1056,11 +1099,15 @@ function createTableNamespace<
         return undefined;
       }
 
-      const indexMethod = ((value?: unknown) =>
+      const indexMethod = ((...args: unknown[]) =>
         createCollectionFacade(
           db,
-          createQueryPlan(table, prop as TableIndexName<DataModel, Table>, value),
-        )) as ((value?: unknown) => unknown) & {
+          createQueryPlan(
+            table,
+            prop as TableIndexName<DataModel, Table>,
+            normalizeIndexSelectorArgs(args),
+          ),
+        )) as ((...args: unknown[]) => unknown) & {
         in: (values: unknown[]) => unknown;
       };
 
@@ -1093,7 +1140,7 @@ function createViaNamespace<
           return undefined;
         }
 
-        return (value?: unknown) =>
+        return (...args: unknown[]) =>
           createCollectionFacade(
             db,
             createViaPlan(
@@ -1101,7 +1148,7 @@ function createViaNamespace<
               joinTable,
               targetField as never,
               prop as UserIndex<DataModel, JoinTable>,
-              value,
+              normalizeIndexSelectorArgs(args),
             ),
           );
       },

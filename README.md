@@ -216,13 +216,13 @@ comments: defineTable({
 const author = await ctx.q.authors.bySlug("ada-lovelace").unique();
 const comments = await ctx.q.comments.byPostId(postId).many();
 const approvedComments = await ctx.q.comments
-  .byPostIdAndStatus({ postId, status: "approved" })
+  .byPostIdAndStatus(postId, "approved")
   .many();
 ```
 
-Single-field indexes accept a scalar. Compound indexes accept an object that
-matches a leading slice of the index definition. Zero-argument calls give you
-the indexed range so you can filter, sort, paginate, or take a subset.
+Single-field indexes accept a scalar. Compound indexes accept positional
+arguments in index order. Zero-argument calls give you the indexed range so you
+can filter, sort, paginate, or take a subset.
 
 ### `with(...)` builds nested result shapes
 
