@@ -1,5 +1,6 @@
 <div align="center">
-  <p>🌿</p>
+  <img width="120" height="120" alt="image" src="https://github.com/user-attachments/assets/05619751-ea3a-4dd9-9bd7-3c231bd11d83" />
+
   <h1>Convex Relations</h1>
 </div>
 
