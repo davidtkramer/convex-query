@@ -1,5 +1,5 @@
 <div align="center">
-  <p style="font-size: 64px;">🌿</p>
+  <p>🌿</p>
   <h1>Convex Relations</h1>
 </div>
 
@@ -60,7 +60,7 @@ This example shows the core model:
 
 ## Equivalent Convex Code
 
-Without `convex-relations`, you end up assembling the same result shape by hand:
+Without `convex-relations`, you end up assembling the same result shape by hand (or by agent 😉):
 
 ```ts
 const post = await ctx.db
@@ -112,7 +112,6 @@ That works, but you are responsible for:
 - remembering to manually `Promise.all(...)` nested relationships
 - traversing join tables by hand
 - assembling the final tree shape yourself for API responses
-- keeping the whole thing type-safe as it grows
 
 ## Table of Contents
 
