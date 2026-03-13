@@ -803,14 +803,10 @@ function createPlanRuntime<DataModel extends GenericDataModel>(
             await Promise.all(
               source.values.map(
                 async (value: unknown) =>
-                  await queryUniqueByIndex(db, source.table, source.index, value),
+                  await queryManyByIndex(db, source.table, source.index, value),
               ),
             )
-          ).filter(
-            (
-              doc: DocumentByName<DataModel, AppTable<DataModel>> | null,
-            ): doc is DocumentByName<DataModel, AppTable<DataModel>> => doc !== null,
-          ),
+          ).flat(),
         mapOne: async (rawItem) => rawItem,
         mapMany: async (rawItems) => rawItems,
         missingMessages: {},
@@ -1566,16 +1562,17 @@ export function createQueryFacade<DataModel extends GenericDataModel>(
   ) as QueryFacade<DataModel>;
 }
 
-async function queryUniqueByIndex<DataModel extends GenericDataModel>(
+async function queryManyByIndex<DataModel extends GenericDataModel>(
   db: DbReader<DataModel>,
   table: AppTable<DataModel>,
   index: string,
   value: unknown,
 ) {
   if (index === 'by_id') {
-    return await (db.query(table) as any)
+    const doc = await (db.query(table) as any)
       .withIndex('by_id', (q: any) => q.eq('_id', value))
       .unique();
+    return doc ? [doc] : [];
   }
 
   return await db
@@ -1583,5 +1580,5 @@ async function queryUniqueByIndex<DataModel extends GenericDataModel>(
     .withIndex(index as any, (q: any) =>
       applyIndexValues(q, normalizeIndexValues(index, value)),
     )
-    .unique();
+    .collect();
 }

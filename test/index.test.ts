@@ -368,6 +368,38 @@ describe("convex-relations indexed builders", () => {
       ]);
     });
   });
+
+  test("support indexed batch lookups on non-unique indexes", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.run(async (ctx) => {
+      const q = createQueryFacade(ctx.db);
+      const firstAuthorId = await seedAuthor(ctx, { slug: "batch-author-a" });
+      const secondAuthorId = await seedAuthor(ctx, { slug: "batch-author-b" });
+      const firstPostId = await seedPost(ctx, {
+        authorId: firstAuthorId,
+        slug: "batch-author-a-1",
+      });
+      const secondPostId = await seedPost(ctx, {
+        authorId: firstAuthorId,
+        slug: "batch-author-a-2",
+      });
+      const thirdPostId = await seedPost(ctx, {
+        authorId: secondAuthorId,
+        slug: "batch-author-b-1",
+      });
+
+      const posts = await q.posts.byAuthorId
+        .in([firstAuthorId, secondAuthorId])
+        .many();
+
+      expect(posts.map((post) => post._id)).toEqual([
+        firstPostId,
+        secondPostId,
+        thirdPostId,
+      ]);
+    });
+  });
 });
 
 describe("convex-relations through builders", () => {
