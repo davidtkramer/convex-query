@@ -145,11 +145,6 @@ type DbReader<DataModel extends GenericDataModel> = GenericDatabaseReader<DataMo
 
 type IdTargetTable<DataModel extends GenericDataModel, Value> =
   Value extends GenericId<infer Table extends AppTable<DataModel>> ? Table : never;
-type JoinTargetTable<
-  DataModel extends GenericDataModel,
-  JoinTable extends AppTable<DataModel>,
-  TargetField extends Extract<keyof AppDoc<DataModel, JoinTable>, string>,
-> = IdTargetTable<DataModel, AppDoc<DataModel, JoinTable>[TargetField]>;
 
 type QueryNode<Output> = PromiseLike<Output> & {
   readonly _executeRoot: () => Promise<Output>;
@@ -158,6 +153,13 @@ type TableInfo<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
 > = NamedTableInfo<DataModel, Table>;
+type QueryPlanHandle<
+  DataModel extends GenericDataModel,
+  Table extends AppTable<DataModel>,
+> = {
+  readonly _plan: QueryPlan;
+  readonly _table: Table;
+};
 
 type WithSpec = Record<string, QueryNode<any>>;
 type WithBuilder<ParentItem, Spec extends WithSpec | undefined = WithSpec | undefined> = (
@@ -209,17 +211,21 @@ type IndexSelector<
     NamedIndex<TableInfo<DataModel, Table>, IndexName>
   >,
 ) => IndexRange;
-type ExpandableSingleQueryBuilder<Item, Nullable extends boolean> = QueryNode<
+type SingleNodeKind<Nullable extends boolean> = Nullable extends true
+  ? 'nullableSingle'
+  : 'single';
+type SingleQueryBuilder<Item, Nullable extends boolean> = QueryNode<
   Nullable extends true ? Item | null : Item
+> &
+  ThroughNodeHandle<Item, SingleNodeKind<Nullable>>;
+type ExpandableSingleQueryBuilder<Item, Nullable extends boolean> = SingleQueryBuilder<
+  Item,
+  Nullable
 > & {
   with<Builder extends AnyWithBuilder<Item>>(
     withBuilder: Builder,
   ): ExpandableSingleQueryBuilder<ExpandWith<Item, Builder>, Nullable>;
 };
-
-type SingleQueryBuilder<Item, Nullable extends boolean> = QueryNode<
-  Nullable extends true ? Item | null : Item
->;
 
 type UniqueQueryBuilder<Item> = SingleQueryBuilder<Item, false>;
 type UniqueOrNullQueryBuilder<Item> = SingleQueryBuilder<Item, true>;
@@ -228,8 +234,8 @@ type FirstOrNullQueryBuilder<Item> = SingleQueryBuilder<Item, true>;
 type FindQueryBuilder<Item> = ExpandableSingleQueryBuilder<Item, false>;
 type FindOrNullQueryBuilder<Item> = ExpandableSingleQueryBuilder<Item, true>;
 
-type ManyQueryBuilder<Item> = QueryNode<Item[]>;
-type BatchQueryBuilder<Item> = QueryNode<Item[]>;
+type ManyQueryBuilder<Item> = QueryNode<Item[]> & ThroughNodeHandle<Item, 'many'>;
+type BatchQueryBuilder<Item> = ManyQueryBuilder<Item>;
 
 type BatchQueryFacade<Item> = {
   with<Builder extends AnyWithBuilder<Item>>(
@@ -237,17 +243,56 @@ type BatchQueryFacade<Item> = {
   ): BatchQueryFacade<ExpandWith<Item, Builder>>;
   many(): BatchQueryBuilder<Item>;
 };
-
-type ViaPair<
-  DataModel extends GenericDataModel,
-  TargetTable extends AppTable<DataModel>,
-  JoinTable extends AppTable<DataModel>,
-> = {
-  doc: AppDoc<DataModel, TargetTable>;
-  link: AppDoc<DataModel, JoinTable>;
+type ThroughPair<SourceItem, TargetItem> = {
+  source: SourceItem;
+  target: TargetItem;
 };
 
-type ManyViaQueryBuilder<Item> = QueryNode<Item[]>;
+type ThroughSourceNodeKind = 'many' | 'single' | 'nullableSingle';
+type ThroughNodeHandle<SourceItem, Kind extends ThroughSourceNodeKind> = {
+  readonly _throughSourceKind: Kind;
+  readonly _throughSourceType?: SourceItem;
+};
+type AnyManySourceNode<SourceItem> = QueryNode<SourceItem[]> &
+  ThroughNodeHandle<SourceItem, 'many'>;
+type AnySingleSourceNode<SourceItem, Nullable extends boolean> = QueryNode<
+  Nullable extends true ? SourceItem | null : SourceItem
+> &
+  ThroughNodeHandle<SourceItem, SingleNodeKind<Nullable>>;
+type ThroughSourceField<
+  DataModel extends GenericDataModel,
+  TargetTable extends AppTable<DataModel>,
+  SourceItem,
+> = {
+  [Field in Extract<keyof SourceItem, string>]: IdTargetTable<
+    DataModel,
+    SourceItem[Field]
+  > extends TargetTable
+    ? Field
+    : never;
+}[Extract<keyof SourceItem, string>];
+type ManyThroughQueryBuilder<Item, SourceItem = unknown> = QueryNode<Item[]> &
+  ThroughNodeHandle<SourceItem, 'many'> & {
+    with<Builder extends AnyWithBuilder<Item>>(
+      withBuilder: Builder,
+    ): ManyThroughQueryBuilder<ExpandWith<Item, Builder>, SourceItem>;
+    withSource<const SourceKey extends string>(
+      key: SourceKey,
+    ): ManyThroughQueryBuilder<AttachSource<Item, SourceItem, SourceKey>, SourceItem>;
+  };
+type SingleThroughQueryBuilder<
+  Item,
+  SourceItem,
+  Nullable extends boolean,
+> = QueryNode<Nullable extends true ? Item | null : Item> &
+  ThroughNodeHandle<SourceItem, Nullable extends true ? 'nullableSingle' : 'single'> & {
+    with<Builder extends AnyWithBuilder<Item>>(
+      withBuilder: Builder,
+    ): SingleThroughQueryBuilder<ExpandWith<Item, Builder>, SourceItem, Nullable>;
+    withSource<const SourceKey extends string>(
+      key: SourceKey,
+    ): SingleThroughQueryBuilder<AttachSource<Item, SourceItem, SourceKey>, SourceItem, Nullable>;
+  };
 
 type TableQueryFacade<
   DataModel extends GenericDataModel,
@@ -265,10 +310,10 @@ type TableQueryFacade<
   uniqueOrNull(): UniqueOrNullQueryBuilder<Item>;
   first(): FirstQueryBuilder<Item>;
   firstOrNull(): FirstOrNullQueryBuilder<Item>;
-  take(count: number): Promise<Item[]>;
+  take(count: number): ManyQueryBuilder<Item>;
   paginate(opts: PaginationOptions): Promise<PaginatedResult<Item>>;
   many(): ManyQueryBuilder<Item>;
-};
+} & QueryPlanHandle<DataModel, Table>;
 
 type TableRangeQueryFacade<
   DataModel extends GenericDataModel,
@@ -286,10 +331,10 @@ type TableRangeQueryFacade<
   uniqueOrNull(): UniqueOrNullQueryBuilder<Item>;
   first(): FirstQueryBuilder<Item>;
   firstOrNull(): FirstOrNullQueryBuilder<Item>;
-  take(count: number): Promise<Item[]>;
+  take(count: number): ManyQueryBuilder<Item>;
   paginate(opts: PaginationOptions): Promise<PaginatedResult<Item>>;
   many(): ManyQueryBuilder<Item>;
-};
+} & QueryPlanHandle<DataModel, Table>;
 
 type TableBatchQueryFacade<
   DataModel extends GenericDataModel,
@@ -302,66 +347,36 @@ type TableBatchQueryFacade<
   many(): BatchQueryBuilder<Item>;
 };
 
-type ViaQueryFacade<
+type ThroughQueryFacade<
   DataModel extends GenericDataModel,
   TargetTable extends AppTable<DataModel>,
-  JoinTable extends AppTable<DataModel>,
+  SourceItem,
   Item = AppDoc<DataModel, TargetTable>,
 > = {
   with<Builder extends AnyWithBuilder<Item>>(
     withBuilder: Builder,
-  ): ViaQueryFacade<DataModel, TargetTable, JoinTable, ExpandWith<Item, Builder>>;
-  order(direction: 'asc' | 'desc'): ViaQueryFacade<DataModel, TargetTable, JoinTable, Item>;
-  filter(
-    filterer: QueryFilter<TableInfo<DataModel, JoinTable>>,
-  ): ViaQueryFacade<DataModel, TargetTable, JoinTable, Item>;
+  ): ThroughQueryFacade<DataModel, TargetTable, SourceItem, ExpandWith<Item, Builder>>;
   withSource<const SourceKey extends string>(
     key: SourceKey,
-  ): ViaQueryFacade<
+  ): ThroughQueryFacade<
     DataModel,
     TargetTable,
-    JoinTable,
-    AttachSource<Item, AppDoc<DataModel, JoinTable>, SourceKey>
+    SourceItem,
+    AttachSource<Item, SourceItem, SourceKey>
   >;
   unique(): UniqueQueryBuilder<Item>;
   uniqueOrNull(): UniqueOrNullQueryBuilder<Item>;
   first(): FirstQueryBuilder<Item>;
   firstOrNull(): FirstOrNullQueryBuilder<Item>;
-  take(count: number): Promise<Item[]>;
-  paginate(opts: PaginationOptions): Promise<PaginatedResult<Item>>;
-  many(): ManyViaQueryBuilder<Item>;
+  many(): ManyQueryBuilder<Item>;
 };
-
-type ValidViaTargetField<
+type ThroughCollectionSource<
   DataModel extends GenericDataModel,
-  JoinTable extends AppTable<DataModel>,
-  TargetTable extends AppTable<DataModel>,
-> = {
-  [Field in Extract<keyof AppDoc<DataModel, JoinTable>, string>]: JoinTargetTable<
-    DataModel,
-    JoinTable,
-    Field
-  > extends TargetTable
-    ? Field
-    : never;
-}[Extract<keyof AppDoc<DataModel, JoinTable>, string>];
-
-type ViaIndexNamespace<
-  DataModel extends GenericDataModel,
-  TargetTable extends AppTable<DataModel>,
-  JoinTable extends AppTable<DataModel>,
-> = {
-  [IndexName in UserIndex<DataModel, JoinTable>]: {
-    (): ViaQueryFacade<DataModel, TargetTable, JoinTable>;
-    <const Args extends PositionalIndexArgs<DataModel, JoinTable, IndexName>>(
-      ...args: Args
-    ): ViaQueryFacade<DataModel, TargetTable, JoinTable>;
-    (
-      selector: IndexSelector<DataModel, JoinTable, IndexName>,
-    ): ViaQueryFacade<DataModel, TargetTable, JoinTable>;
-  };
-};
-
+  SourceTable extends AppTable<DataModel>,
+  SourceItem = AppDoc<DataModel, SourceTable>,
+> =
+  | TableQueryFacade<DataModel, SourceTable, SourceItem>
+  | TableRangeQueryFacade<DataModel, SourceTable, SourceItem>;
 type TableNamespace<
   DataModel extends GenericDataModel,
   Table extends AppTable<DataModel>,
@@ -375,13 +390,28 @@ type TableNamespace<
   in<const Id extends GenericId<Table>>(
     ids: Id[],
   ): TableBatchQueryFacade<DataModel, Table>;
-  via: <
-    const JoinTable extends AppTable<DataModel>,
-    const TargetField extends ValidViaTargetField<DataModel, JoinTable, Table>,
-  >(
-    joinTable: JoinTable,
-    targetField: TargetField,
-  ) => ViaIndexNamespace<DataModel, Table, JoinTable>;
+  through: {
+    <const SourceTable extends AppTable<DataModel>, SourceItem, const TargetField extends ThroughSourceField<
+      DataModel,
+      Table,
+      SourceItem
+    >>(
+      sourceQuery: ThroughCollectionSource<DataModel, SourceTable, SourceItem>,
+      targetField: TargetField,
+    ): ThroughQueryFacade<DataModel, Table, SourceItem>;
+    <SourceItem, const TargetField extends ThroughSourceField<DataModel, Table, SourceItem>>(
+      sourceQuery: AnyManySourceNode<SourceItem>,
+      targetField: TargetField,
+    ): ManyThroughQueryBuilder<AppDoc<DataModel, Table>, SourceItem>;
+    <SourceItem, const TargetField extends ThroughSourceField<DataModel, Table, SourceItem>>(
+      sourceQuery: AnySingleSourceNode<SourceItem, false>,
+      targetField: TargetField,
+    ): SingleThroughQueryBuilder<AppDoc<DataModel, Table>, SourceItem, false>;
+    <SourceItem, const TargetField extends ThroughSourceField<DataModel, Table, SourceItem>>(
+      sourceQuery: AnySingleSourceNode<SourceItem, true>,
+      targetField: TargetField,
+    ): SingleThroughQueryBuilder<AppDoc<DataModel, Table>, SourceItem, true>;
+  };
 } & TableRangeQueryFacade<DataModel, Table> & {
     [IndexName in TableIndexName<DataModel, Table>]: {
       (
@@ -420,19 +450,36 @@ type QuerySourcePlan =
       table: string;
       index: string;
       values: unknown[];
-    }
-  | {
-      kind: 'via';
-      targetTable: string;
-      joinTable: string;
-      targetField: string;
-      index: string;
-      selector?: unknown;
     };
 
 type QueryPlan = {
   source: QuerySourcePlan;
   modifiers: QueryModifier[];
+  expanders: AnyWithBuilder<any>[];
+};
+
+type ThroughCollectionPlan = {
+  targetTable: string;
+  targetField: string;
+  sourcePlan: QueryPlan;
+  expanders: AnyWithBuilder<any>[];
+  sourceKey?: string;
+};
+
+type ThroughSourceNodePlan<
+  SourceItem,
+  Kind extends ThroughSourceNodeKind,
+> = {
+  targetTable: string;
+  targetField: string;
+  sourceNode: QueryNode<
+    Kind extends 'many'
+      ? SourceItem[]
+      : Kind extends 'nullableSingle'
+        ? SourceItem | null
+        : SourceItem
+  > &
+    ThroughNodeHandle<SourceItem, Kind>;
   expanders: AnyWithBuilder<any>[];
   sourceKey?: string;
 };
@@ -527,13 +574,6 @@ function withExpander(plan: QueryPlan, expander: AnyWithBuilder<any>): QueryPlan
   };
 }
 
-function withSourceKey(plan: QueryPlan, sourceKey: string): QueryPlan {
-  return {
-    ...plan,
-    sourceKey,
-  };
-}
-
 function normalizeIndexValues(index: string, value: unknown) {
   if (Array.isArray(value)) {
     const fieldNames = inferFieldNamesFromIndex(index);
@@ -602,90 +642,107 @@ function createIndexedQuery<DataModel extends GenericDataModel>(
   );
 }
 
-function createViaQuery<DataModel extends GenericDataModel>(
-  db: DbReader<DataModel>,
-  joinTable: AppTable<DataModel>,
-  index: string,
-  selector?: unknown,
-) {
-  const baseQuery = db.query(joinTable);
-  if (selector === undefined) {
-    return baseQuery.withIndex(index as any);
+function sourceDescription(plan: QueryPlan) {
+  switch (plan.source.kind) {
+    case 'id':
+      return `${plan.source.table} with id ${plan.source.id}`;
+    case 'batch':
+      return `${plan.source.table} via ${plan.source.index}`;
+    case 'query':
+      return plan.source.index
+        ? `${plan.source.table} with index ${plan.source.index}`
+        : plan.source.table;
   }
-  if (typeof selector === 'function') {
-    return baseQuery.withIndex(index as any, selector as any);
-  }
-  return baseQuery.withIndex(index as any, (q: any) =>
-    applyIndexValues(q, normalizeIndexValues(index, selector)),
-  );
 }
 
-async function collectViaPairs<
+async function resolveThroughPair<
   DataModel extends GenericDataModel,
   TargetTable extends AppTable<DataModel>,
-  JoinTable extends AppTable<DataModel>,
+  SourceItem,
 >(
   db: DbReader<DataModel>,
   targetField: string,
-  links: AppDoc<DataModel, JoinTable>[],
-): Promise<ViaPair<DataModel, TargetTable, JoinTable>[]> {
+  source: SourceItem,
+): Promise<ThroughPair<SourceItem, AppDoc<DataModel, TargetTable>> | null> {
+  const id = (source as Record<string, unknown>)[targetField] as
+    | GenericId<TargetTable>
+    | null
+    | undefined;
+  if (!id) {
+    return null;
+  }
+
+  const target = await db.get(id);
+  return target ? { source, target } : null;
+}
+
+async function collectThroughPairs<
+  DataModel extends GenericDataModel,
+  TargetTable extends AppTable<DataModel>,
+  SourceItem,
+>(
+  db: DbReader<DataModel>,
+  targetField: string,
+  sourceItems: SourceItem[],
+): Promise<ThroughPair<SourceItem, AppDoc<DataModel, TargetTable>>[]> {
   const pairs = await Promise.all(
-    links.map(async (link) => {
-      const id = link[targetField] as GenericId<TargetTable> | null | undefined;
-      const doc = id ? await db.get(id) : null;
-      return doc ? { doc, link } : null;
-    }),
+    sourceItems.map(async (source) => await resolveThroughPair(db, targetField, source)),
   );
 
-  return pairs.filter((pair) => pair !== null) as ViaPair<
-    DataModel,
-    TargetTable,
-    JoinTable
+  return pairs.filter((pair) => pair !== null) as ThroughPair<
+    SourceItem,
+    AppDoc<DataModel, TargetTable>
   >[];
 }
 
-async function collectViaPairsUntil<
+async function* iterateDecoratedSourceItems<DataModel extends GenericDataModel>(
+  db: DbReader<DataModel>,
+  plan: QueryPlan,
+) {
+  if (plan.source.kind !== 'query') {
+    for (const item of await executeMany(db, plan)) {
+      yield item;
+    }
+    return;
+  }
+
+  const runtime = createPlanRuntime(db, plan);
+  const source = plan.source;
+  const query = buildQuery(
+    () => createIndexedQuery(db, source.table, source.index, source.selector),
+    plan.modifiers,
+  );
+
+  for await (const rawItem of query as AsyncIterable<any>) {
+    yield await decorateItem(plan, rawItem, await runtime.mapOne(rawItem));
+  }
+}
+
+async function collectThroughPairsUntil<
   DataModel extends GenericDataModel,
   TargetTable extends AppTable<DataModel>,
-  JoinTable extends AppTable<DataModel>,
+  SourceItem,
 >(
   db: DbReader<DataModel>,
   targetField: string,
-  query: AsyncIterable<AppDoc<DataModel, JoinTable>>,
+  sourceItems: AsyncIterable<SourceItem>,
   count: number,
-): Promise<ViaPair<DataModel, TargetTable, JoinTable>[]> {
-  const pairs: ViaPair<DataModel, TargetTable, JoinTable>[] = [];
+): Promise<ThroughPair<SourceItem, AppDoc<DataModel, TargetTable>>[]> {
+  const pairs: ThroughPair<SourceItem, AppDoc<DataModel, TargetTable>>[] = [];
 
-  for await (const link of query) {
-    const id = link[targetField] as GenericId<TargetTable> | null | undefined;
-    if (!id) continue;
+  for await (const source of sourceItems) {
+    const pair = await resolveThroughPair(db, targetField, source);
+    if (!pair) {
+      continue;
+    }
 
-    const doc = await db.get(id);
-    if (!doc) continue;
-
-    pairs.push({ doc, link });
+    pairs.push(pair);
     if (pairs.length >= count) {
       break;
     }
   }
 
   return pairs;
-}
-
-function normalizeViaUniqueError(
-  error: unknown,
-  targetTable: string,
-  joinTable: string,
-  index: string,
-) {
-  if (
-    error instanceof Error &&
-    error.message === 'unique() returned more than one result'
-  ) {
-    return new Error(`Expected unique ${targetTable} via ${joinTable}.${index}`);
-  }
-
-  return error;
 }
 
 function createPlanRuntime<DataModel extends GenericDataModel>(
@@ -746,70 +803,11 @@ function createPlanRuntime<DataModel extends GenericDataModel>(
         },
       };
     }
-    case 'via': {
-      const runQuery = () =>
-        buildQuery(
-          () => createViaQuery(db, source.joinTable, source.index, source.selector),
-          plan.modifiers,
-        );
-
-      return {
-        unique: async () => {
-          const pairs = await collectViaPairsUntil(
-            db,
-            source.targetField,
-            runQuery(),
-            2,
-          );
-          if (pairs.length > 1) {
-            throw new Error('unique() returned more than one result');
-          }
-          return pairs[0] ?? null;
-        },
-        first: async () => {
-          const pairs = await collectViaPairsUntil(
-            db,
-            source.targetField,
-            runQuery(),
-            1,
-          );
-          return pairs[0] ?? null;
-        },
-        many: async () =>
-          await collectViaPairs(db, source.targetField, await runQuery().collect()),
-        take: async (count) =>
-          await collectViaPairs(db, source.targetField, await runQuery().take(count)),
-        paginate: async (opts) => {
-          const result = await runQuery().paginate(opts);
-          return {
-            page: await collectViaPairs(db, source.targetField, result.page),
-            isDone: result.isDone,
-            continueCursor: result.continueCursor,
-          };
-        },
-        mapOne: async (rawItem) => rawItem.doc,
-        mapMany: async (rawItems) => rawItems.map((pair) => pair.doc),
-        missingMessages: {
-          unique: `Could not find ${source.targetTable} via ${source.joinTable}.${source.index}`,
-          first: `Could not find first ${source.targetTable} via ${source.joinTable}.${source.index}`,
-        },
-        normalizeUniqueError: (error) =>
-          normalizeViaUniqueError(
-            error,
-            source.targetTable,
-            source.joinTable,
-            source.index,
-          ),
-      };
-    }
   }
 }
 
 async function decorateItem(plan: QueryPlan, rawItem: any, item: any) {
   let output = item;
-  if (plan.source.kind === 'via' && plan.sourceKey) {
-    output = { ...output, [plan.sourceKey]: rawItem.link };
-  }
   if (plan.expanders.length > 0) {
     output = await applyExpanders(output, plan.expanders);
   }
@@ -818,12 +816,6 @@ async function decorateItem(plan: QueryPlan, rawItem: any, item: any) {
 
 async function decorateItems(plan: QueryPlan, rawItems: any[], items: any[]) {
   let output = items;
-  if (plan.source.kind === 'via' && plan.sourceKey) {
-    output = output.map((item, index) => ({
-      ...item,
-      [plan.sourceKey!]: rawItems[index]!.link,
-    }));
-  }
   if (plan.expanders.length > 0) {
     output = await applyExpandersToMany(output, plan.expanders);
   }
@@ -947,6 +939,365 @@ async function executePaginate<DataModel extends GenericDataModel>(
   };
 }
 
+function createSingleQueryBuilder<Item, Nullable extends boolean>(
+  executeRoot: () => Promise<Nullable extends true ? Item | null : Item>,
+  nullable: Nullable,
+): SingleQueryBuilder<Item, Nullable> {
+  return {
+    ...createQueryNode(executeRoot),
+    _throughSourceKind: nullable ? 'nullableSingle' : 'single',
+  } as SingleQueryBuilder<Item, Nullable>;
+}
+
+function createManyQueryBuilder<Item>(
+  executeRoot: () => Promise<Item[]>,
+): ManyQueryBuilder<Item> {
+  return {
+    ...createQueryNode(executeRoot),
+    _throughSourceKind: 'many',
+  } as ManyQueryBuilder<Item>;
+}
+
+async function decorateThroughItem<Item, SourceItem>(
+  expanders: AnyWithBuilder<any>[],
+  sourceKey: string | undefined,
+  pair: ThroughPair<SourceItem, Item>,
+) {
+  let output: any = pair.target;
+  if (sourceKey) {
+    output = { ...output, [sourceKey]: pair.source };
+  }
+  if (expanders.length > 0) {
+    output = await applyExpanders(output, expanders);
+  }
+  return output;
+}
+
+async function decorateThroughItems<Item, SourceItem>(
+  expanders: AnyWithBuilder<any>[],
+  sourceKey: string | undefined,
+  pairs: ThroughPair<SourceItem, Item>[],
+) {
+  let output: any[] = pairs.map(({ source, target }) =>
+    sourceKey ? { ...target, [sourceKey]: source } : target,
+  );
+  if (expanders.length > 0) {
+    output = await applyExpandersToMany(output, expanders);
+  }
+  return output;
+}
+
+async function executeThroughCollectionMany<DataModel extends GenericDataModel>(
+  db: DbReader<DataModel>,
+  plan: ThroughCollectionPlan,
+) {
+  const sourceItems = await executeMany(db, plan.sourcePlan);
+  const pairs = await collectThroughPairs<DataModel, any, any>(
+    db,
+    plan.targetField,
+    sourceItems,
+  );
+  return await decorateThroughItems(plan.expanders, plan.sourceKey, pairs);
+}
+
+async function executeThroughCollectionFirst<DataModel extends GenericDataModel>(
+  db: DbReader<DataModel>,
+  plan: ThroughCollectionPlan,
+) {
+  const pair = (
+    await collectThroughPairsUntil<DataModel, any, any>(
+      db,
+      plan.targetField,
+      iterateDecoratedSourceItems(db, plan.sourcePlan),
+      1,
+    )
+  )[0];
+
+  if (!pair) {
+    throw new Error(`Could not find first ${plan.targetTable} through ${sourceDescription(plan.sourcePlan)}`);
+  }
+
+  return await decorateThroughItem(plan.expanders, plan.sourceKey, pair);
+}
+
+async function executeThroughCollectionFirstOrNull<DataModel extends GenericDataModel>(
+  db: DbReader<DataModel>,
+  plan: ThroughCollectionPlan,
+) {
+  const pair = (
+    await collectThroughPairsUntil<DataModel, any, any>(
+      db,
+      plan.targetField,
+      iterateDecoratedSourceItems(db, plan.sourcePlan),
+      1,
+    )
+  )[0];
+
+  return pair
+    ? await decorateThroughItem(plan.expanders, plan.sourceKey, pair)
+    : null;
+}
+
+async function executeThroughCollectionUnique<DataModel extends GenericDataModel>(
+  db: DbReader<DataModel>,
+  plan: ThroughCollectionPlan,
+) {
+  const pairs = await collectThroughPairsUntil<DataModel, any, any>(
+    db,
+    plan.targetField,
+    iterateDecoratedSourceItems(db, plan.sourcePlan),
+    2,
+  );
+
+  if (pairs.length > 1) {
+    throw new Error('unique() returned more than one result');
+  }
+
+  const pair = pairs[0];
+  if (!pair) {
+    throw new Error(`Could not find ${plan.targetTable} through ${sourceDescription(plan.sourcePlan)}`);
+  }
+
+  return await decorateThroughItem(plan.expanders, plan.sourceKey, pair);
+}
+
+async function executeThroughCollectionUniqueOrNull<DataModel extends GenericDataModel>(
+  db: DbReader<DataModel>,
+  plan: ThroughCollectionPlan,
+) {
+  const pairs = await collectThroughPairsUntil<DataModel, any, any>(
+    db,
+    plan.targetField,
+    iterateDecoratedSourceItems(db, plan.sourcePlan),
+    2,
+  );
+
+  if (pairs.length > 1) {
+    throw new Error('unique() returned more than one result');
+  }
+
+  return pairs[0]
+    ? await decorateThroughItem(plan.expanders, plan.sourceKey, pairs[0])
+    : null;
+}
+
+async function executeThroughManyNode<
+  DataModel extends GenericDataModel,
+  SourceItem,
+>(
+  db: DbReader<DataModel>,
+  plan: ThroughSourceNodePlan<SourceItem, 'many'>,
+) {
+  const sourceItems = await plan.sourceNode._executeRoot();
+  const pairs = await collectThroughPairs<DataModel, any, SourceItem>(
+    db,
+    plan.targetField,
+    sourceItems,
+  );
+  return await decorateThroughItems(plan.expanders, plan.sourceKey, pairs);
+}
+
+async function executeThroughSingleNode<
+  DataModel extends GenericDataModel,
+  SourceItem,
+  Nullable extends boolean,
+>(
+  db: DbReader<DataModel>,
+  plan: ThroughSourceNodePlan<
+    SourceItem,
+    Nullable extends true ? 'nullableSingle' : 'single'
+  >,
+  nullable: Nullable,
+) {
+  const sourceItem = await plan.sourceNode._executeRoot();
+  if (sourceItem == null) {
+    if (nullable) {
+      return null as Nullable extends true ? any : never;
+    }
+    throw new Error(`Could not find ${plan.targetTable} through source query`);
+  }
+
+  const pair = await resolveThroughPair<DataModel, any, SourceItem>(
+    db,
+    plan.targetField,
+    sourceItem as SourceItem,
+  );
+  if (!pair) {
+    if (nullable) {
+      return null as Nullable extends true ? any : never;
+    }
+    throw new Error(`Could not find ${plan.targetTable} through source query`);
+  }
+
+  return await decorateThroughItem(plan.expanders, plan.sourceKey, pair);
+}
+
+function withThroughCollectionExpander(
+  plan: ThroughCollectionPlan,
+  expander: AnyWithBuilder<any>,
+): ThroughCollectionPlan {
+  return {
+    ...plan,
+    expanders: [...plan.expanders, expander],
+  };
+}
+
+function withThroughCollectionSourceKey(
+  plan: ThroughCollectionPlan,
+  sourceKey: string,
+): ThroughCollectionPlan {
+  return {
+    ...plan,
+    sourceKey,
+  };
+}
+
+function withThroughNodeExpander<
+  SourceItem,
+  Kind extends ThroughSourceNodeKind,
+>(
+  plan: ThroughSourceNodePlan<SourceItem, Kind>,
+  expander: AnyWithBuilder<any>,
+): ThroughSourceNodePlan<SourceItem, Kind> {
+  return {
+    ...plan,
+    expanders: [...plan.expanders, expander],
+  };
+}
+
+function withThroughNodeSourceKey<
+  SourceItem,
+  Kind extends ThroughSourceNodeKind,
+>(
+  plan: ThroughSourceNodePlan<SourceItem, Kind>,
+  sourceKey: string,
+): ThroughSourceNodePlan<SourceItem, Kind> {
+  return {
+    ...plan,
+    sourceKey,
+  };
+}
+
+function createThroughCollectionFacade<
+  DataModel extends GenericDataModel,
+  TargetTable extends AppTable<DataModel>,
+  SourceItem,
+  Item = AppDoc<DataModel, TargetTable>,
+>(
+  db: DbReader<DataModel>,
+  plan: ThroughCollectionPlan,
+): ThroughQueryFacade<DataModel, TargetTable, SourceItem, Item> {
+  return {
+    with<Builder extends AnyWithBuilder<Item>>(withBuilder: Builder) {
+      return createThroughCollectionFacade<
+        DataModel,
+        TargetTable,
+        SourceItem,
+        ExpandWith<Item, Builder>
+      >(db, withThroughCollectionExpander(plan, withBuilder));
+    },
+    withSource<const SourceKey extends string>(key: SourceKey) {
+      return createThroughCollectionFacade<
+        DataModel,
+        TargetTable,
+        SourceItem,
+        AttachSource<Item, SourceItem, SourceKey>
+      >(db, withThroughCollectionSourceKey(plan, key));
+    },
+    unique() {
+      return createSingleQueryBuilder(
+        async () => await executeThroughCollectionUnique(db, plan),
+        false,
+      );
+    },
+    uniqueOrNull() {
+      return createSingleQueryBuilder(
+        async () => await executeThroughCollectionUniqueOrNull(db, plan),
+        true,
+      );
+    },
+    first() {
+      return createSingleQueryBuilder(
+        async () => await executeThroughCollectionFirst(db, plan),
+        false,
+      );
+    },
+    firstOrNull() {
+      return createSingleQueryBuilder(
+        async () => await executeThroughCollectionFirstOrNull(db, plan),
+        true,
+      );
+    },
+    many() {
+      return createManyQueryBuilder(
+        async () => await executeThroughCollectionMany(db, plan),
+      );
+    },
+  };
+}
+
+function createThroughManyQueryBuilder<
+  DataModel extends GenericDataModel,
+  SourceItem,
+  Item = unknown,
+>(
+  db: DbReader<DataModel>,
+  plan: ThroughSourceNodePlan<SourceItem, 'many'>,
+): ManyThroughQueryBuilder<Item, SourceItem> {
+  return {
+    ...createQueryNode(async () => await executeThroughManyNode(db, plan)),
+    _throughSourceKind: 'many',
+    with<Builder extends AnyWithBuilder<Item>>(withBuilder: Builder) {
+      return createThroughManyQueryBuilder<DataModel, SourceItem, ExpandWith<Item, Builder>>(
+        db,
+        withThroughNodeExpander(plan, withBuilder),
+      );
+    },
+    withSource<const SourceKey extends string>(key: SourceKey) {
+      return createThroughManyQueryBuilder<
+        DataModel,
+        SourceItem,
+        AttachSource<Item, SourceItem, SourceKey>
+      >(db, withThroughNodeSourceKey(plan, key));
+    },
+  } as ManyThroughQueryBuilder<Item, SourceItem>;
+}
+
+function createThroughSingleQueryBuilder<
+  DataModel extends GenericDataModel,
+  SourceItem,
+  Item,
+  Nullable extends boolean,
+>(
+  db: DbReader<DataModel>,
+  plan: ThroughSourceNodePlan<
+    SourceItem,
+    Nullable extends true ? 'nullableSingle' : 'single'
+  >,
+  nullable: Nullable,
+): SingleThroughQueryBuilder<Item, SourceItem, Nullable> {
+  return {
+    ...createQueryNode(async () => await executeThroughSingleNode(db, plan, nullable)),
+    _throughSourceKind: nullable ? 'nullableSingle' : 'single',
+    with<Builder extends AnyWithBuilder<Item>>(withBuilder: Builder) {
+      return createThroughSingleQueryBuilder<
+        DataModel,
+        SourceItem,
+        ExpandWith<Item, Builder>,
+        Nullable
+      >(db, withThroughNodeExpander(plan, withBuilder), nullable);
+    },
+    withSource<const SourceKey extends string>(key: SourceKey) {
+      return createThroughSingleQueryBuilder<
+        DataModel,
+        SourceItem,
+        AttachSource<Item, SourceItem, SourceKey>,
+        Nullable
+      >(db, withThroughNodeSourceKey(plan, key), nullable);
+    },
+  } as SingleThroughQueryBuilder<Item, SourceItem, Nullable>;
+}
+
 function createExpandableSingleFromPlan<Item, Nullable extends boolean>(
   db: DbReader<any>,
   plan: QueryPlan,
@@ -960,7 +1311,7 @@ function createExpandableSingleFromPlan<Item, Nullable extends boolean>(
       : ((await executeFind(db, plan)) as Nullable extends true ? Item | null : Item);
 
   return {
-    ...createQueryNode(execute),
+    ...createSingleQueryBuilder(execute, nullable),
     with<Builder extends AnyWithBuilder<Item>>(withBuilder: Builder) {
       return createExpandableSingleFromPlan<ExpandWith<Item, Builder>, Nullable>(
         db,
@@ -983,7 +1334,7 @@ function createBatchFacade<Item>(
       );
     },
     many() {
-      return createQueryNode(async () => await executeMany(db, plan));
+      return createManyQueryBuilder(async () => await executeMany(db, plan));
     },
   };
 }
@@ -993,9 +1344,10 @@ function createCollectionFacade<Item>(
   plan: QueryPlan,
 ):
   | TableRangeQueryFacade<any, any, Item>
-  | TableQueryFacade<any, any, Item>
-  | ViaQueryFacade<any, any, any, Item> {
+  | TableQueryFacade<any, any, Item> {
   const facade: any = {
+    _plan: plan,
+    _table: plan.source.table,
     with<Builder extends AnyWithBuilder<Item>>(withBuilder: Builder) {
       return createCollectionFacade<ExpandWith<Item, Builder>>(
         db,
@@ -1015,32 +1367,33 @@ function createCollectionFacade<Item>(
       );
     },
     unique() {
-      return createQueryNode(async () => await executeUnique(db, plan));
+      return createSingleQueryBuilder(async () => await executeUnique(db, plan), false);
     },
     uniqueOrNull() {
-      return createQueryNode(async () => await executeUniqueOrNull(db, plan));
+      return createSingleQueryBuilder(
+        async () => await executeUniqueOrNull(db, plan),
+        true,
+      );
     },
     first() {
-      return createQueryNode(async () => await executeFirst(db, plan));
+      return createSingleQueryBuilder(async () => await executeFirst(db, plan), false);
     },
     firstOrNull() {
-      return createQueryNode(async () => await executeFirstOrNull(db, plan));
+      return createSingleQueryBuilder(
+        async () => await executeFirstOrNull(db, plan),
+        true,
+      );
     },
     take(count: number) {
-      return executeTake(db, plan, count);
+      return createManyQueryBuilder(async () => await executeTake(db, plan, count));
     },
     paginate(opts: PaginationOptions) {
       return executePaginate(db, plan, opts);
     },
     many() {
-      return createQueryNode(async () => await executeMany(db, plan));
+      return createManyQueryBuilder(async () => await executeMany(db, plan));
     },
   };
-
-  if (plan.source.kind === 'via') {
-    facade.withSource = (key: string) =>
-      createCollectionFacade(db, withSourceKey(plan, key));
-  }
 
   return facade;
 }
@@ -1071,21 +1424,35 @@ function createBatchPlan(table: string, index: string, values: unknown[]): Query
   });
 }
 
-function createViaPlan(
-  targetTable: string,
-  joinTable: string,
-  targetField: string,
-  index: string,
-  selector?: unknown,
-): QueryPlan {
-  return createPlan({
-    kind: 'via',
-    targetTable,
-    joinTable,
-    targetField,
-    index,
-    selector,
-  });
+function isCollectionSource(value: unknown): value is QueryPlanHandle<any, any> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    '_plan' in value &&
+    '_table' in value
+  );
+}
+
+function isManySourceNode(value: unknown): value is AnyManySourceNode<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    '_executeRoot' in value &&
+    (value as { _throughSourceKind?: unknown })._throughSourceKind === 'many'
+  );
+}
+
+function isSingleSourceNode(
+  value: unknown,
+): value is AnySingleSourceNode<unknown, false> | AnySingleSourceNode<unknown, true> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    '_executeRoot' in value &&
+    ((value as { _throughSourceKind?: unknown })._throughSourceKind === 'single' ||
+      (value as { _throughSourceKind?: unknown })._throughSourceKind ===
+        'nullableSingle')
+  );
 }
 
 function normalizeIndexSelectorArgs(args: unknown[]) {
@@ -1117,8 +1484,39 @@ function createTableNamespace<
     in(ids: GenericId<Table>[]) {
       return createBatchFacade(db, createBatchPlan(table, 'by_id', ids as never[]));
     },
-    via(joinTable: AppTable<DataModel>, targetField: string) {
-      return createViaNamespace(db, table, joinTable, targetField);
+    through(sourceQuery: unknown, targetField: string) {
+      if (isCollectionSource(sourceQuery)) {
+        return createThroughCollectionFacade(db, {
+          targetTable: table,
+          targetField,
+          sourcePlan: sourceQuery._plan,
+          expanders: [],
+        });
+      }
+
+      if (isManySourceNode(sourceQuery)) {
+        return createThroughManyQueryBuilder(db, {
+          targetTable: table,
+          targetField,
+          sourceNode: sourceQuery,
+          expanders: [],
+        });
+      }
+
+      if (isSingleSourceNode(sourceQuery)) {
+        return createThroughSingleQueryBuilder(
+          db,
+          {
+            targetTable: table,
+            targetField,
+            sourceNode: sourceQuery as AnySingleSourceNode<any, any>,
+            expanders: [],
+          },
+          sourceQuery._throughSourceKind === 'nullableSingle',
+        );
+      }
+
+      throw new Error('through() requires a query facade or lazy query node');
     },
   } as any;
 
@@ -1152,40 +1550,6 @@ function createTableNamespace<
       return indexMethod;
     },
   }) as TableNamespace<DataModel, Table>;
-}
-
-function createViaNamespace<
-  DataModel extends GenericDataModel,
-  const TargetTable extends AppTable<DataModel>,
-  const JoinTable extends AppTable<DataModel>,
->(
-  db: DbReader<DataModel>,
-  targetTable: TargetTable,
-  joinTable: JoinTable,
-  targetField: string,
-): ViaIndexNamespace<DataModel, TargetTable, JoinTable> {
-  return new Proxy(
-    {},
-    {
-      get(_target, prop) {
-        if (typeof prop !== 'string' || RESERVED_PROMISE_KEYS.has(prop)) {
-          return undefined;
-        }
-
-        return (...args: unknown[]) =>
-          createCollectionFacade(
-            db,
-            createViaPlan(
-              targetTable,
-              joinTable,
-              targetField as never,
-              prop as UserIndex<DataModel, JoinTable>,
-              normalizeIndexSelectorArgs(args),
-            ),
-          );
-      },
-    },
-  ) as ViaIndexNamespace<DataModel, TargetTable, JoinTable>;
 }
 
 export function createQueryFacade<DataModel extends GenericDataModel>(

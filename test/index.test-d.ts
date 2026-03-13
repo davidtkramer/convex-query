@@ -137,10 +137,9 @@ describe("convex-relations type surface", () => {
     >();
   });
 
-  test("via builders support value zero-arg selector and source composition", () => {
+  test("through builders support collection sources, source nodes, and source composition", () => {
     const postTags = q.tags
-      .via("postsTags", "tagId")
-      .byPostId(postId)
+      .through(q.postsTags.byPostId(postId), "tagId")
       .withSource("link")
       .many();
     assertType<TagId>(null as any as Awaited<typeof postTags>[number]["_id"]);
@@ -149,54 +148,73 @@ describe("convex-relations type surface", () => {
     >();
 
     const taggedPosts = q.posts
-      .via("postsTags", "postId")
-      .byTagId(tagId)
+      .through(q.postsTags.byTagId(tagId), "postId")
       .withSource("link")
       .many();
     expectTypeOf<Awaited<typeof taggedPosts>[number]["link"]>().toEqualTypeOf<
       DataModel["postsTags"]["document"]
     >();
 
-    const expandedViaFirst = q.posts
-      .via("postsTags", "postId")
-      .byTagId(tagId)
+    const expandedThroughFirst = q.posts
+      .through(q.postsTags.byTagId(tagId), "postId")
       .withSource("link")
       .with((post) => ({ author: q.authors.find(post.authorId) }))
       .first();
-    expectTypeOf<Awaited<typeof expandedViaFirst>["link"]>().toEqualTypeOf<
+    expectTypeOf<Awaited<typeof expandedThroughFirst>["link"]>().toEqualTypeOf<
       DataModel["postsTags"]["document"]
     >();
-    expectTypeOf<Awaited<typeof expandedViaFirst>["author"]>().toEqualTypeOf<
+    expectTypeOf<Awaited<typeof expandedThroughFirst>["author"]>().toEqualTypeOf<
       DataModel["authors"]["document"]
     >();
 
-    const expandedViaUniqueOrNull = q.tags
-      .via("postsTags", "tagId")
-      .byPostIdAndTagId(postId, tagId)
+    const expandedThroughUniqueOrNull = q.tags
+      .through(q.postsTags.byPostIdAndTagId(postId, tagId), "tagId")
       .withSource("link")
       .uniqueOrNull();
     expectTypeOf<
-      NonNullable<Awaited<typeof expandedViaUniqueOrNull>>["link"]
+      NonNullable<Awaited<typeof expandedThroughUniqueOrNull>>["link"]
     >().toEqualTypeOf<DataModel["postsTags"]["document"]>();
 
-    const foundTagsViaZeroArg = q.tags
-      .via("postsTags", "tagId")
-      .byPostId()
-      .filter((query) => query.eq(query.field("postId"), postId))
-      .order("desc")
+    const foundTagsThroughZeroArg = q.tags
+      .through(
+        q.postsTags
+          .byPostId()
+          .filter((query) => query.eq(query.field("postId"), postId))
+          .order("desc"),
+        "tagId",
+      )
       .many();
-    expectTypeOf<Awaited<typeof foundTagsViaZeroArg>>().toEqualTypeOf<
+    expectTypeOf<Awaited<typeof foundTagsThroughZeroArg>>().toEqualTypeOf<
       DataModel["tags"]["document"][]
     >();
 
-    const foundTagsViaSelector = q.tags
-      .via("postsTags", "tagId")
-      .byPostId((query) => query.eq("postId", postId))
-      .order("desc")
+    const foundTagsThroughSelector = q.tags
+      .through(
+        q.postsTags.byPostId((query) => query.eq("postId", postId)).order("desc"),
+        "tagId",
+      )
       .many();
-    expectTypeOf<Awaited<typeof foundTagsViaSelector>>().toEqualTypeOf<
+    expectTypeOf<Awaited<typeof foundTagsThroughSelector>>().toEqualTypeOf<
       DataModel["tags"]["document"][]
     >();
+
+    const throughSingleSource = q.authors
+      .through(q.posts.bySlug("hello-world").unique(), "authorId")
+      .withSource("post")
+      .with((author) => ({ latestPost: q.posts.byAuthorId(author._id).firstOrNull() }));
+    expectTypeOf<Awaited<typeof throughSingleSource>["post"]>().toEqualTypeOf<
+      DataModel["posts"]["document"]
+    >();
+    expectTypeOf<
+      Awaited<typeof throughSingleSource>["latestPost"]
+    >().toEqualTypeOf<DataModel["posts"]["document"] | null>();
+
+    const throughManySource = q.tags
+      .through(q.postsTags.byPostId(postId).take(1), "tagId")
+      .withSource("link");
+    expectTypeOf<
+      Awaited<typeof throughManySource>[number]["link"]
+    >().toEqualTypeOf<DataModel["postsTags"]["document"]>();
   });
 
   test("compute lifts arbitrary async work into the query tree", () => {
@@ -230,6 +248,9 @@ describe("convex-relations type surface", () => {
       .many()
       // @ts-expect-error terminals no longer accept paginate
       .paginate({ cursor: null, numItems: 5 });
+    void q.posts.find(postId).with((post) => ({
+      recentComments: q.comments.byPostId(post._id).take(5),
+    }));
     void q.posts
       .unique()
       // @ts-expect-error terminals no longer accept with
@@ -245,22 +266,30 @@ describe("convex-relations type surface", () => {
     const batchPosts = q.posts.in([postId]).many();
     // @ts-expect-error batch builders no longer accept with
     void batchPosts.with(() => ({}));
-    const viaManyTags = q.tags
-      .via("postsTags", "tagId")
-      .byPostId(postId)
-      .many();
-    // @ts-expect-error via many builders no longer accept with
-    void viaManyTags.with(() => ({}));
+    const throughManyTags = q.tags.through(q.postsTags.byPostId(postId), "tagId").many();
+    // @ts-expect-error through many builders no longer accept with
+    void throughManyTags.with(() => ({}));
     void q.tags
-      .via("postsTags", "tagId")
-      .byPostId(postId)
+      .through(q.postsTags.byPostId(postId), "tagId")
       .many()
-      // @ts-expect-error via many builders no longer accept withSource
+      // @ts-expect-error through many builders no longer accept withSource
       .withSource("link");
-    // @ts-expect-error invalid via target field for tags
-    void q.tags.via("postsTags", "postId");
-    // @ts-expect-error invalid join index
-    void q.tags.via("postsTags", "tagId").bySlug("news");
+    // @ts-expect-error invalid through target field for tags
+    void q.tags.through(q.postsTags.byPostId(postId), "postId");
+    // @ts-expect-error invalid through source field type for tags
+    void q.tags.through(q.posts.bySlug("news"), "authorId");
+    // @ts-expect-error order stays on the source query passed to through
+    void q.tags.through(q.postsTags.byPostId(postId), "tagId").order("desc");
+    // @ts-expect-error filter stays on the source query passed to through
+    void q.tags.through(q.postsTags.byPostId(postId), "tagId").filter((query) =>
+      query.eq(query.field("slug"), "news"),
+    );
+    // @ts-expect-error take stays on the source query passed to through
+    void q.tags.through(q.postsTags.byPostId(postId), "tagId").take(1);
+    void q.tags
+      .through(q.postsTags.byPostId(postId), "tagId")
+      // @ts-expect-error paginate stays on the source query passed to through
+      .paginate({ cursor: null, numItems: 5 });
   });
 
   test("filter callbacks are not any", () => {

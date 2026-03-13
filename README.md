@@ -30,8 +30,7 @@ export const getPost = query({
           }))
           .take(10),
         categories: ctx.q.categories
-          .via("postCategories", "categoryId")
-          .byPostId(post._id)
+          .through(ctx.q.postCategories.byPostId(post._id), "categoryId")
           .many(),
       }))
       .unique();
@@ -55,7 +54,7 @@ This example shows the core model:
 - table-scoped access through `q.posts`, `q.comments`, and `q.categories`
 - indexes as first-class query methods like `.bySlug(...)` and `.byPostId(...)`
 - nested relation expansion with `.with(...)` inside `.with(...)`
-- join-table traversal with `.via(...)`
+- reference traversal with `.through(...)`
 - parallel nested loading within each `with(...)`
 - a final strongly typed, API-ready result from one expression
 
@@ -122,7 +121,7 @@ That works, but you are responsible for:
 - [API](#api)
 - [Table Access Patterns](#table-access-patterns)
 - [Relation Expansion with `with(...)`](#relation-expansion-with-with)
-- [Join Table Traversal with `via(...)`](#join-table-traversal-with-via)
+- [Reference Traversal with `through(...)`](#reference-traversal-with-through)
 - [Terminals](#terminals)
 - [Error Semantics](#error-semantics)
 - [Performance Characteristics](#performance-characteristics)
@@ -321,16 +320,16 @@ Single-field indexes accept a scalar:
 const author = await q.authors.bySlug("ada-lovelace").unique();
 ```
 
-Compound indexes accept an object containing a valid prefix:
+Compound indexes accept leading positional arguments:
 
 ```ts
 const comments = await q.comments
-  .byPostIdAndCreatedAt({ postId })
+  .byPostIdAndStatus(postId)
   .order("desc")
   .take(20);
 
 const exactOrPrefix = await q.comments
-  .byPostIdAndCreatedAt({ postId, createdAt: 1700000000000 })
+  .byPostIdAndStatus(postId, "approved")
   .many();
 ```
 
@@ -339,8 +338,8 @@ const exactOrPrefix = await q.comments
 You can also pass Convex's index selector callback:
 
 ```ts
-const recentComments = await q.comments
-  .byPostIdAndCreatedAt((q) => q.eq("postId", postId).gt("createdAt", cutoff))
+const approvedComments = await q.comments
+  .byPostIdAndStatus((q) => q.eq("postId", postId).eq("status", "approved"))
   .many();
 ```
 
@@ -392,25 +391,27 @@ const post = await q.posts
 
 Each `with(...)` stage sees fields added by earlier stages.
 
-## Join Table Traversal with `via(...)`
+## Reference Traversal with `through(...)`
 
-Use `via(joinTable, targetField)` for many-to-many relationships.
+Use `through(sourceQuery, foreignKeyField)` when another query already produces
+rows that point at the table you want.
 
 Given `postCategories { postId, categoryId }`, you can fetch categories for a post:
 
 ```ts
 const categories = await q.categories
-  .via("postCategories", "categoryId")
-  .byPostId(postId)
+  .through(q.postCategories.byPostId(postId), "categoryId")
   .many();
 ```
 
-You can also attach the join row with `withSource(...)`:
+This is essentially syntactic sugar for "run the source query, extract ids from
+that field, then load the target rows for you."
+
+You can also attach the source row with `withSource(...)`:
 
 ```ts
 const categories = await q.categories
-  .via("postCategories", "categoryId")
-  .byPostId(postId)
+  .through(q.postCategories.byPostId(postId).order("desc"), "categoryId")
   .withSource("link")
   .many();
 
@@ -418,7 +419,38 @@ categories[0]?.link.postId;
 categories[0]?.link.categoryId;
 ```
 
-This is useful when the join table stores metadata like ordering, role, or timestamps.
+This is useful when the source table stores metadata like ordering, role, or
+timestamps.
+
+`through(...)` is not limited to join tables. Any compatible source query works:
+
+```ts
+const author = await q.authors
+  .through(q.posts.bySlug("hello-world"), "authorId")
+  .withSource("post")
+  .unique();
+
+author.post.slug;
+```
+
+Source-query shaping lives inside the `through(...)` argument:
+
+```ts
+const tags = await q.tags
+  .through(
+    q.postTags
+      .byPostId(postId)
+      .filter((query) => query.eq(query.field("kind"), "primary"))
+      .order("desc")
+      .take(10),
+    "tagId",
+  )
+  .withSource("link")
+  .many();
+```
+
+After `through(...)`, you can keep shaping the target result with `with(...)`
+and `withSource(...)`, then choose a terminal like `many()` or `first()`.
 
 ## Terminals
 
@@ -477,7 +509,6 @@ const page = await q.posts.byAuthorId(authorId).paginate({
 - `unique()` also throws if there are multiple matches
 - `first()` throws if there is no match
 - `findOrNull()`, `uniqueOrNull()`, and `firstOrNull()` return `null` instead
-- `via(...).unique()` normalizes its duplicate error to include the target table and join index
 
 ## Performance Characteristics
 
@@ -491,8 +522,7 @@ const post = await q.posts.find(postId).with((post) => ({
   comments: q.comments.byPostId(post._id).take(10),
   categoryCount: compute(async () => {
     const categories = await q.categories
-      .via("postCategories", "categoryId")
-      .byPostId(post._id)
+      .through(q.postCategories.byPostId(post._id), "categoryId")
       .many();
     return categories.length;
   }),
@@ -519,7 +549,9 @@ q.posts
 
 The second stage waits for the first stage, because it depends on fields added earlier.
 
-`via(...)` currently resolves target documents by fetching join rows first, then loading each target document individually. This is correct and predictable, but it is not a single batched join at the database level.
+`through(...)` currently resolves target documents by fetching the source rows
+first, then loading each target document individually. This is correct and
+predictable, but it is not a single batched join at the database level.
 
 ### Practical guidance
 
@@ -537,8 +569,7 @@ This:
 
 ```ts
 const categories = await q.categories
-  .via("postCategories", "categoryId")
-  .byPostId(postId)
+  .through(q.postCategories.byPostId(postId), "categoryId")
   .many();
 ```
 
@@ -562,7 +593,7 @@ but also composes naturally with `with(...)`, `take(...)`, `firstOrNull()`, and 
 - Table names, `_id` types, index names, and compound index prefixes are inferred
 - Invalid table names and invalid index names are rejected at compile time
 - Scalar shorthand is only allowed for single-field indexes
-- Compound indexes require a valid prefix object
+- Compound indexes use leading positional arguments
 
 ## License
 

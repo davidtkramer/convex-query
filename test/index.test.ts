@@ -54,6 +54,31 @@ describe("convex-relations direct id builders", () => {
       expect(missing).toBeNull();
     });
   });
+
+  test("supports lazy take inside nested with expansions", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.run(async (ctx) => {
+      const q = createQueryFacade(ctx.db);
+      const authorId = await seedAuthor(ctx, { slug: "nested-take-author" });
+      const commenterId = await seedAuthor(ctx, { slug: "nested-take-commenter" });
+      const postId = await seedPost(ctx, { authorId, slug: "nested-take-post" });
+
+      await seedComment(ctx, { postId, authorId: commenterId, body: "older" });
+      const newestCommentId = await seedComment(ctx, {
+        postId,
+        authorId: commenterId,
+        body: "newer",
+      });
+
+      const post = await q.posts.find(postId).with((foundPost) => ({
+        recentComments: q.comments.byPostId(foundPost._id).order("desc").take(1),
+      }));
+
+      expect(post.recentComments).toHaveLength(1);
+      expect(post.recentComments[0]?._id).toBe(newestCommentId);
+    });
+  });
 });
 
 describe("convex-relations table range builders", () => {
@@ -337,8 +362,8 @@ describe("convex-relations indexed builders", () => {
   });
 });
 
-describe("convex-relations via builders", () => {
-  test("support value, zero-arg, selector, withSource, and expansions", async () => {
+describe("convex-relations through builders", () => {
+  test("support collection sources, source nodes, withSource, and expansions", async () => {
     const t = convexTest(schema, modules);
 
     await t.run(async (ctx) => {
@@ -356,45 +381,58 @@ describe("convex-relations via builders", () => {
       await seedPostTag(ctx, { postId: secondPostId, tagId });
 
       const postTags = await q.tags
-        .via("postsTags", "tagId")
-        .byPostId(postId)
+        .through(q.postsTags.byPostId(postId), "tagId")
         .withSource("link")
         .many();
       const taggedPosts = await q.posts
-        .via("postsTags", "postId")
-        .byTagId(tagId)
+        .through(q.postsTags.byTagId(tagId), "postId")
         .withSource("link")
         .many();
-      const expandedViaFirst = await q.posts
-        .via("postsTags", "postId")
-        .byTagId(tagId)
+      const expandedThroughFirst = await q.posts
+        .through(q.postsTags.byTagId(tagId), "postId")
         .withSource("link")
         .with((post) => ({ author: q.authors.find(post.authorId) }))
         .first();
-      const expandedViaUniqueOrNull = await q.tags
-        .via("postsTags", "tagId")
-        .byPostIdAndTagId(postId, tagId)
+      const expandedThroughUniqueOrNull = await q.tags
+        .through(q.postsTags.byPostIdAndTagId(postId, tagId), "tagId")
         .withSource("link")
         .uniqueOrNull();
-      const viaZeroArg = await q.tags
-        .via("postsTags", "tagId")
-        .byPostId()
-        .filter((query) => query.eq(query.field("postId"), postId))
-        .order("desc")
+      const throughZeroArg = await q.tags
+        .through(
+          q.postsTags
+            .byPostId()
+            .filter((query) => query.eq(query.field("postId"), postId))
+            .order("desc"),
+          "tagId",
+        )
         .many();
-      const viaSelector = await q.tags
-        .via("postsTags", "tagId")
-        .byPostId((query) => query.eq("postId", postId))
-        .order("desc")
+      const throughSelector = await q.tags
+        .through(
+          q.postsTags.byPostId((query) => query.eq("postId", postId)).order("desc"),
+          "tagId",
+        )
         .many();
+      const throughSingleSource = await q.authors
+        .through(q.posts.bySlug("tagged-post").unique(), "authorId")
+        .withSource("post")
+        .with((author) => ({
+          latestPost: q.posts.byAuthorId(author._id).order("desc").firstOrNull(),
+        }));
+      const throughTakenSource = await q.tags
+        .through(q.postsTags.byPostId(postId).order("desc").take(1), "tagId")
+        .withSource("link");
 
       expect(postTags).toHaveLength(2);
       expect(postTags[0]?.link._id).toBe(firstLinkId);
       expect(taggedPosts).toHaveLength(2);
-      expect(expandedViaFirst.author._id).toBe(authorId);
-      expect(expandedViaUniqueOrNull?.link.postId).toBe(postId);
-      expect(viaZeroArg.map((tag) => tag._id)).toEqual([secondTagId, tagId]);
-      expect(viaSelector.map((tag) => tag._id)).toEqual([secondTagId, tagId]);
+      expect(expandedThroughFirst.author._id).toBe(authorId);
+      expect(expandedThroughUniqueOrNull?.link.postId).toBe(postId);
+      expect(throughZeroArg.map((tag) => tag._id)).toEqual([secondTagId, tagId]);
+      expect(throughSelector.map((tag) => tag._id)).toEqual([secondTagId, tagId]);
+      expect(throughSingleSource.post._id).toBe(postId);
+      expect(throughSingleSource.latestPost?._id).toBe(secondPostId);
+      expect(throughTakenSource).toHaveLength(1);
+      expect(throughTakenSource[0]?.link.postId).toBe(postId);
     });
   });
 });
